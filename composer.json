@@ -1,0 +1,20 @@
+{
+    "name": "xiaosongshu/rabbitmq",
+    "description": "\"延迟队列rabbitmq\"",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Xiaosongshu\\Rabbitmq\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "xiaosongshu",
+            "email": "2723659854@qq.com"
+        }
+    ],
+    "require": {
+        "php-amqplib/php-amqplib": "3.2.*"
+    }
+}
