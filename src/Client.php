@@ -64,16 +64,24 @@ class Client
      */
     public function __construct(string $exchangeName = '', string $queueName = '', string $type = '', array $hostConfig = [])
     {
-        /** 兼容没有config函数的框架，支持手动传入rabbitmq服务器配置 */
-        try {
-            $config = config('rabbitmq');
-        } catch (\Exception $exception) {
-            if (!empty($hostConfig)) {
-                $config = $hostConfig;
-            } else {
-                throw new \RuntimeException($exception->getMessage());
+        if (!function_exists('config')){
+            $config = $hostConfig;
+            if (empty($config)){
+                throw new \RuntimeException("请配置rabbitmq服务器连接参数");
+            }
+        }else{
+            /** 兼容没有config函数的框架，支持手动传入rabbitmq服务器配置 */
+            try {
+                $config = config('rabbitmq');
+            } catch (\Exception $exception) {
+                if (!empty($hostConfig)) {
+                    $config = $hostConfig;
+                } else {
+                    throw new \RuntimeException($exception->getMessage());
+                }
             }
         }
+
 
         $this->host = $config['host'];
         $this->port = $config['port'];
