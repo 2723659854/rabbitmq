@@ -1,7 +1,7 @@
 <?php
-namespace root\yanglong;
 
-require_once __DIR__.'/vendor/autoload.php';
+namespace xiaosongshu\test;
+require_once __DIR__ . '/vendor/autoload.php';
 
 /**
  * demo
@@ -33,14 +33,18 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
         //TODO 这里写你的业务逻辑
         // ...
         var_dump($params);
+        /** 成功，返回ack */
         return self::ACK;
+        /** 失败，返回NACK*/
         //return self::NACK;
     }
 }
 
 /** 投递普通消息 */
-\root\yanglong\Demo::publish(['name' => 'tom']);
-\root\yanglong\Demo::publish(['name' => 'jim']);
-\root\yanglong\Demo::publish(['name' => 'jack']);
-/** 开启消费 */
-\root\yanglong\Demo::consume();
+\xiaosongshu\test\Demo::publish(['name' => 'tom']);
+\xiaosongshu\test\Demo::publish(['name' => 'jim']);
+\xiaosongshu\test\Demo::publish(['name' => 'jack']);
+/** 开启消费，本函数为阻塞，后面的代码不会执行 */
+\xiaosongshu\test\Demo::consume();
+/** 关闭消费者 */
+\xiaosongshu\test\Demo::close();
