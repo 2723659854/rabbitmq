@@ -60,35 +60,35 @@ abstract class   Client implements RabbiMQInterface
     private static function make()
     {
         /** 初始化订阅方式 */
-        if (!self::$type) {
-            self::$type = self::EXCHANGETYPE_DIRECT;
+        if (!static::$type) {
+            static::$type = static::EXCHANGETYPE_DIRECT;
         }
         $className = get_called_class();
         /** 初始化交换机 */
-        if (!self::$exchangeName) {
-            self::$exchangeName = $className;
+        if (!static::$exchangeName) {
+            static::$exchangeName = $className;
         }
         /** 初始化队列 */
-        if (!self::$queueName) {
-            self::$queueName = $className;
+        if (!static::$queueName) {
+            static::$queueName = $className;
         }
         /**  创建一个rabbitmq连接*/
         try {
-            self::$connection = new AMQPStreamConnection(self::$host, self::$port, self::$user, self::$pass);
+            static::$connection = new AMQPStreamConnection(static::$host, static::$port, static::$user, static::$pass);
         } catch (\Exception|\RuntimeException|AMQPRuntimeException|AMQPConnectionBlockedException $exception) {
             throw new \RuntimeException($exception->getMessage());
         }
 
         /**  创建一个通道*/
-        self::$channel = self::$connection->channel();
+        static::$channel = static::$connection->channel();
         /** 声明交换机 */
-        self::$channel->exchange_declare(self::$exchangeName, self::$type ?: self::EXCHANGETYPE_DIRECT, false, true, false, false, false, new AMQPTable(["x-delayed-type" => self::EXCHANGETYPE_DIRECT]));
+        static::$channel->exchange_declare(static::$exchangeName, static::$type ?: static::EXCHANGETYPE_DIRECT, false, true, false, false, false, new AMQPTable(["x-delayed-type" => static::EXCHANGETYPE_DIRECT]));
         /** 声明队列  */
-        self::$channel->queue_declare(self::$queueName, false, true, false, false);
+        static::$channel->queue_declare(static::$queueName, false, true, false, false);
         /** 将队列绑定到交换机 同时设置路由，*/
-        self::$channel->queue_bind(self::$queueName, self::$exchangeName, self::$queueName);
+        static::$channel->queue_bind(static::$queueName, static::$exchangeName, static::$queueName);
         /** 保存链接 */
-        self::$instance = self::$connection;
+        static::$instance = static::$connection;
     }
 
     /**
@@ -121,14 +121,14 @@ abstract class   Client implements RabbiMQInterface
     private static function sendDelay(string $msg, int $delay = 0)
     {
         /** 检查链接 */
-        if (!self::$connection) {
-            self::make();
+        if (!static::$connection) {
+            static::make();
         }
-        self::$timeOut = $delay;
+        static::$timeOut = $delay;
         /** @var AMQPMessage $_msg 创建rabbitmq的延迟消息 */
-        $_msg = self::createMessageDelay($msg, self::$timeOut);
+        $_msg = static::createMessageDelay($msg, static::$timeOut);
         /** 发布消息 语法：消息体，交换机，路由（这里作者简化了用的队列名称代理路由名称）*/
-        self::$channel->basic_publish($_msg, self::$exchangeName, self::$queueName);
+        static::$channel->basic_publish($_msg, static::$exchangeName, static::$queueName);
     }
 
     /**
@@ -138,11 +138,11 @@ abstract class   Client implements RabbiMQInterface
      */
     public static function close()
     {
-        if (self::$instance){
+        if (static::$instance){
             /** 发布完成后关闭通道 */
-            self::$channel->close();
+            static::$channel->close();
             /** 发布完成后关闭连接 */
-            self::$connection->close();
+            static::$connection->close();
         }
     }
 
@@ -154,8 +154,8 @@ abstract class   Client implements RabbiMQInterface
     private static function consumeDelay()
     {
         /** 检查链接 */
-        if (!self::$instance) {
-            self::make();
+        if (!static::$instance) {
+            static::make();
         }
 
         /**
@@ -172,17 +172,17 @@ abstract class   Client implements RabbiMQInterface
                     /** 处理业务逻辑 */
                     $ack = call_user_func([$class, 'handle'], $params);
                     //$ack = static::handle($params);
-                    if ($ack == self::ACK) {
+                    if ($ack == static::ACK) {
                         /** 确认接收到消息 */
-                        self::$channel->basic_ack($msg->delivery_info['delivery_tag'], false);
+                        static::$channel->basic_ack($msg->delivery_info['delivery_tag'], false);
                     }
-                    if ($ack == self::NACK) {
+                    if ($ack == static::NACK) {
                         /** 重复投递 */
-                        self::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, true);
+                        static::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, true);
                     }
-                    if ($ack == self::REJECT) {
+                    if ($ack == static::REJECT) {
                         /** 重复投递 */
-                        self::$channel->basic_reject($msg->delivery_info['delivery_tag'], true);
+                        static::$channel->basic_reject($msg->delivery_info['delivery_tag'], true);
                     }
                 } else {
                     throw new \Exception("No 'handle' method found");
@@ -195,15 +195,15 @@ abstract class   Client implements RabbiMQInterface
         };
 
         /** 设置消费者智能分配模式：就是当前消费者消费完了才接收新的消息，交换机分配的时候优先分配给空闲的消费者 */
-        self::$channel->basic_qos(0, 1, false);
+        static::$channel->basic_qos(0, 1, false);
         /** 开始消费队里里面的消息 这里要注意一下，第二个参数添加了标签，主要是用来后面关闭通道使用，并且不会接收本消费者发送的消息*/
         //TODO 这里没有处理死信队列
-        self::$channel->basic_consume(self::$queueName, self::$queueName, false, false, false, false, $function);
+        static::$channel->basic_consume(static::$queueName, static::$queueName, false, false, false, false, $function);
         /** 如果有配置了回调方法，则等待接收消息。这里不建议休眠，因为设置了消息确认，会导致rabbitmq疯狂发送消息，如果取消了消息确认，休眠会导致消息丢失 */
-        while (count(self::$channel->callbacks)) {
-            self::$channel->wait();
+        while (count(static::$channel->callbacks)) {
+            static::$channel->wait();
         }
-        self::close();
+        static::close();
     }
 
     /**
@@ -215,7 +215,7 @@ abstract class   Client implements RabbiMQInterface
      */
     public static function publish(array $msg, int $time = 0)
     {
-        self::sendDelay(json_encode($msg), $time);
+        static::sendDelay(json_encode($msg), $time);
     }
 
     /**
@@ -226,6 +226,6 @@ abstract class   Client implements RabbiMQInterface
      */
     public static function consume()
     {
-        self::consumeDelay();
+        static::consumeDelay();
     }
 }
