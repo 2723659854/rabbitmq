@@ -16,7 +16,7 @@
     }
   ],
   "require": {
-    "php": ">=7.4.1",
+    "php": ">=7.3.0",
     "phpseclib/phpseclib": "^3.0",
     "php-amqplib/php-amqplib": "3.2.*",
     "ext-json": "*"
