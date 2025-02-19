@@ -23,9 +23,9 @@ abstract class   Client implements RabbiMQInterface
     /** @var string 服务器登陆密码 */
     public static $pass = "guest";
     /** @var \PhpAmqpLib\Channel\AbstractChannel|\PhpAmqpLib\Channel\AMQPChannel 渠道通道 */
-    private static $channel;
+    protected static $channel;
     /** @var AMQPStreamConnection rabbitmq连接 */
-    private static $connection;
+    protected static $connection;
 
     /** @var int 过期时间 */
     public static $timeOut = 0;
@@ -51,7 +51,7 @@ abstract class   Client implements RabbiMQInterface
     /** 消费失败，支持重复投递一次 */
     const REJECT = 3;
     /** rabbitmq链接 */
-    private static  $instance = null;
+    protected static  $instance = null;
 
     /**
      * 初始化相关配置，建立链接
