@@ -3,7 +3,7 @@
 ## 项目地址：https://github.com/2723659854/rabbitmq
 
 ###  项目介绍
-消息队列主要用于业务解耦，本项目采用rabbitmq，支持thinkPHP，laravel，webman，yii等常用框架，也可以单独使用。
+消息队列主要用于业务解耦，本项目采用rabbitmq扩展，支持thinkPHP，laravel，webman，yii等常用框架，也可以单独使用。
 ### 安装方法 install
 
 ```shell
@@ -48,6 +48,16 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
         var_dump($params);
         return self::ACK;
         //return self::NACK;
+    }
+    
+      /**
+     * 处理异常消息
+     * @param \RuntimeException $exception
+     * @return void
+     */
+    public static function error(\RuntimeException $exception)
+    {
+        var_dump("捕获到了异常",$exception->getMessage());
     }
 }
 
@@ -160,8 +170,10 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
 \xiaosongshu\test\Demo::publish(['name' => 'tom']);
 \xiaosongshu\test\Demo::publish(['name' => 'jim']);
 \xiaosongshu\test\Demo::publish(['name' => 'jack']);
-/** 开启消费，本函数为阻塞，后面的代码不会执行 */
+/** 方法1：开启消费，本函数为阻塞，后面的代码不会执行 */
 \xiaosongshu\test\Demo::consume();
+/** 方法2：开启消费，累计消费10条数据后退出 */
+\xiaosongshu\test\Demo::consume(10);
 /** 关闭消费者 */
 \xiaosongshu\test\Demo::close();
 ```
