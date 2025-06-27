@@ -2,7 +2,6 @@
 
 namespace xiaosongshu\test;
 
-
 require_once __DIR__ . '/vendor/autoload.php';
 
 /**
@@ -32,14 +31,9 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
      */
     public static function handle(array $params): int
     {
-        //TODO 这里写你的业务逻辑
-        // ...
         var_dump($params);
-
         /** 成功，返回ack */
         return self::ACK;
-        /** 失败，返回NACK*/
-        //return self::NACK;
     }
 
     /**
@@ -52,15 +46,3 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
         var_dump("捕获到了异常",$exception->getMessage());
     }
 }
-
-/** 投递普通消息 */
-\xiaosongshu\test\Demo::publish(['name' => 'tom']);
-\xiaosongshu\test\Demo::publish(['name' => 'jim']);
-\xiaosongshu\test\Demo::publish(['name' => 'jack']);
-//for($i=0;$i<100;$i++){
-//    \xiaosongshu\test\Demo::publish(['name' => 'tom','num'=>$i]);
-//}
-/** 开启消费，本函数为阻塞，后面的代码不会执行 */
-\xiaosongshu\test\Demo::consume();
-/** 关闭消费者 */
-\xiaosongshu\test\Demo::close();

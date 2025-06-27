@@ -11,7 +11,7 @@ use PhpAmqpLib\Wire\AMQPTable;
 /**
  * @purpose rabbitmq投递和消费
  */
-abstract class   Client implements RabbiMQInterface
+abstract class Client implements RabbiMQInterface
 {
 
     /** @var string 服务器地址 */
@@ -51,14 +51,38 @@ abstract class   Client implements RabbiMQInterface
     /** 消费失败，支持重复投递一次 */
     const REJECT = 3;
     /** rabbitmq链接 */
-    protected static  $instance = null;
+    protected static $instance = null;
+
+    /** 重新连接最大尝试次数 */
+    protected static $maxRetryConnect = 5;
+
+    /** 已经尝试重连次数 */
+    protected static $hasRetryConnect = 0;
+
+    /** 心跳间隔 */
+    public static $heartbeat = 60;
 
     /**
-     * 初始化相关配置，建立链接
-     * @return void
+     * 构建客户端链接
+     * @return bool|void
+     * @throws \Exception
+     * @note true 表示已连接 false表示未连接
      */
     private static function make()
     {
+        /** 防止重复连接 */
+        if (static::isConnected()) {
+            return true;
+        }
+
+        /** 加锁防止并发重连 */
+        static $connecting = false;
+        if ($connecting) {
+            return true;
+        }
+        $connecting = true;
+
+        static::close();
         /** 初始化订阅方式 */
         if (!static::$type) {
             static::$type = static::EXCHANGETYPE_DIRECT;
@@ -72,44 +96,50 @@ abstract class   Client implements RabbiMQInterface
         if (!static::$queueName) {
             static::$queueName = $className;
         }
-        /**  创建一个rabbitmq连接*/
+
         try {
-            //static::$connection = new AMQPStreamConnection(static::$host, static::$port, static::$user, static::$pass);
-            /** 更新设置心跳为30秒发送一次 */
             static::$connection = new AMQPStreamConnection(
-                static::$host,
-                static::$port,
-                static::$user,
-                static::$pass,
-                '/',                     // vhost (默认 '/')
-                false,                   // insist (默认 false)
-                'AMQPLAIN',              // login_method (默认 'AMQPLAIN')
-                null,                    // login_response (默认 null)
-                'en_US',                 // locale (默认 'en_US')
-                3.0,                     // connection_timeout (默认 3.0 秒)
-                3.0,                     // read_write_timeout (默认 3.0 秒)
-                null,                    // context (默认 null)
-                false,                   // keepalive (默认 false)
-                30,                      // heartbeat (默认 0，这里设为 30 秒)
-                0.0,                     // channel_rpc_timeout (默认 0.0)
-                null,                    // ssl_protocol (默认 null)
-                null                     // config (默认 null)
+                static::$host, static::$port, static::$user, static::$pass,
+                '/', false, 'AMQPLAIN', null, 'en_US', 1.0,
+                3.0, null, false, static::$heartbeat, 0.0, null, null
             );
 
-        } catch (\Exception|\RuntimeException|AMQPRuntimeException|AMQPConnectionBlockedException $exception) {
-            throw new \RuntimeException($exception->getMessage());
-        }
+            /** 创建通道和其他初始化 */
+            static::$channel = static::$connection->channel();
+            static::$channel->exchange_declare(static::$exchangeName, static::$type ?: static::EXCHANGETYPE_DIRECT, false, true, false, false, false, new AMQPTable(["x-delayed-type" => static::EXCHANGETYPE_DIRECT]));
+            static::$channel->queue_declare(static::$queueName, false, true, false, false);
+            static::$channel->queue_bind(static::$queueName, static::$exchangeName, static::$queueName);
 
-        /**  创建一个通道*/
-        static::$channel = static::$connection->channel();
-        /** 声明交换机 */
-        static::$channel->exchange_declare(static::$exchangeName, static::$type ?: static::EXCHANGETYPE_DIRECT, false, true, false, false, false, new AMQPTable(["x-delayed-type" => static::EXCHANGETYPE_DIRECT]));
-        /** 声明队列  */
-        static::$channel->queue_declare(static::$queueName, false, true, false, false);
-        /** 将队列绑定到交换机 同时设置路由，*/
-        static::$channel->queue_bind(static::$queueName, static::$exchangeName, static::$queueName);
-        /** 保存链接 */
-        static::$instance = static::$connection;
+            static::$instance = static::$connection;
+            static::$hasRetryConnect = 0;
+            $connecting = false;
+            return true;
+
+        } catch (\Exception|\RuntimeException|AMQPRuntimeException|AMQPConnectionBlockedException $exception) {
+            $connecting = false;
+            static::close();
+            /** 尝试重连 */
+            if (static::$hasRetryConnect < static::$maxRetryConnect) {
+                static::$hasRetryConnect++;
+                call_user_func([get_called_class(), 'error'], new \RuntimeException(json_encode(['message' =>"attempt to reconnect to the rabbitmq-server ".static::$hasRetryConnect]), JSON_UNESCAPED_UNICODE));
+                sleep(static::getSleepTime());
+                static::make();
+            } else {
+                /** 超过重连次数，说明服务器挂了，没有必要再尝试了，直接通知家属，拜拜了你呢 */
+                call_user_func([get_called_class(), 'error'], new \RuntimeException(json_encode(['message' => "rabbitmq server has gone away"]), JSON_UNESCAPED_UNICODE));
+                return false;
+            }
+        }
+    }
+
+    /**
+     * 获取休眠时间
+     * @return int
+     */
+    private static function getSleepTime()
+    {
+        /** 设计理念：每一次尝试重连间隔时间逐渐增长，最长25秒，防止同一时间所有消费者疯狂请求连接服务端 */
+        return static::$hasRetryConnect * 5 + rand(0, 5);
     }
 
     /**
@@ -133,23 +163,31 @@ abstract class   Client implements RabbiMQInterface
     }
 
     /**
-     * 发送延迟消息
-     * @param string $msg 消息内容
+     * 投递消息
+     * @param string $msg 消息体
      * @param int $delay 延迟时间
-     * @return void
+     * @return bool true表示投递成功 false表示投递失败
      * @throws \Exception
      */
     private static function sendDelay(string $msg, int $delay = 0)
     {
         /** 检查链接 */
-        if (!static::$connection) {
+        if (!static::isConnected()) {
             static::make();
+            if (!self::isConnected()) {
+                return false;
+            }
         }
         static::$timeOut = $delay;
         /** @var AMQPMessage $_msg 创建rabbitmq的延迟消息 */
         $_msg = static::createMessageDelay($msg, static::$timeOut);
-        /** 发布消息 语法：消息体，交换机，路由（这里作者简化了用的队列名称代理路由名称）*/
-        static::$channel->basic_publish($_msg, static::$exchangeName, static::$queueName);
+        try {
+            /** 发布消息 语法：消息体，交换机，路由（这里作者简化了用的队列名称代理路由名称）*/
+            static::$channel->basic_publish($_msg, static::$exchangeName, static::$queueName);
+            return true;
+        } catch (\Exception|\RuntimeException $exception) {
+            return false;
+        }
     }
 
     /**
@@ -159,12 +197,15 @@ abstract class   Client implements RabbiMQInterface
      */
     public static function close()
     {
-        if (static::$instance){
+        if (static::$instance && static::$instance->isConnected()) {
             /** 发布完成后关闭通道 */
             static::$channel->close();
             /** 发布完成后关闭连接 */
             static::$connection->close();
         }
+        static::$instance = null;
+        static::$connection = null;
+        static::$channel = null;
     }
 
     /** 设置本次消费个数 */
@@ -172,6 +213,20 @@ abstract class   Client implements RabbiMQInterface
 
     /** 当前队列剩余消费个数 */
     protected static $remain = 0;
+
+    /**
+     * 当前连接是否存活
+     * @return bool
+     */
+    protected static function isConnected()
+    {
+        /** 检查链接和通道 */
+        if (static::$connection && static::$connection->isConnected()
+            && static::$channel && static::$channel->is_open()) {
+            return true;
+        }
+        return false;
+    }
 
     /**
      * 消费延迟队列
@@ -182,8 +237,11 @@ abstract class   Client implements RabbiMQInterface
     private static function consumeDelay()
     {
         /** 检查链接 */
-        if (!static::$instance) {
+        if (!static::isConnected()) {
             static::make();
+            if (!static::isConnected()) {
+                return; // 重连失败直接返回
+            }
         }
 
         /**
@@ -214,17 +272,17 @@ abstract class   Client implements RabbiMQInterface
                 } else {
                     // 类或方法不存在时拒绝消息并不重新投递，因为这是代码错误，不能把消息重复投递消耗资源
                     static::$channel->basic_reject($msg->delivery_info['delivery_tag'], false);
-                    call_user_func([$class, 'error'],  new \RuntimeException(json_encode(['message' => "method 'handle' doesn't exists",'data' =>$params ]),JSON_UNESCAPED_UNICODE));
+                    call_user_func([$class, 'error'], new \RuntimeException(json_encode(['message' => "method 'handle' doesn't exists", 'data' => $params]), JSON_UNESCAPED_UNICODE));
                 }
 
             } catch (\Exception|\RuntimeException $exception) {
                 // 类或方法不存在时拒绝消息并不重新投递，这里是逻辑错误，应该由业务来修正，不能重复投递消耗资源
                 static::$channel->basic_reject($msg->delivery_info['delivery_tag'], false);
                 /** 消费失败，是业务的问题，这里不做处理 */
-                call_user_func([$class, 'error'],  new \RuntimeException(json_encode(['message' => $exception->getMessage(),'data' =>$params ]),JSON_UNESCAPED_UNICODE));
+                call_user_func([$class, 'error'], new \RuntimeException(json_encode(['message' => $exception->getMessage(), 'data' => $params]), JSON_UNESCAPED_UNICODE));
             }
             /** 如果设置了本次消费个数，则剩余可消费数-1 */
-            if (static::$total>0){
+            if (static::$total > 0) {
                 static::$remain--;
             }
         };
@@ -234,36 +292,41 @@ abstract class   Client implements RabbiMQInterface
         /** 开始消费队里里面的消息 这里要注意一下，第二个参数添加了标签，主要是用来后面关闭通道使用，并且不会接收本消费者发送的消息*/
         static::$channel->basic_consume(static::$queueName, static::$queueName, false, false, false, false, $function);
         /** 如果有配置了回调方法，则等待接收消息。这里不建议休眠，因为设置了消息确认，会导致rabbitmq疯狂发送消息，如果取消了消息确认，休眠会导致消息丢失 */
-
-        /** 如果设置了消费个数，则只消费指定个数后退出 */
-        if(static::$total){
-            while (static::$remain && count(static::$channel->callbacks)){
-                static::$channel->wait();
+        try {
+            /** 如果设置了消费个数，则只消费指定个数后退出 */
+            if (static::$total) {
+                while (static::$remain && count(static::$channel->callbacks)) {
+                    static::$channel->wait();
+                }
+            } else {
+                /** 未设置指定消费个数，则常驻内存消费 */
+                while (count(static::$channel->callbacks)) {
+                    static::$channel->wait();
+                }
             }
-        }else{
-            /** 未设置指定消费个数，则常驻内存消费 */
-            while (count(static::$channel->callbacks)) {
-                static::$channel->wait();
-            }
+        } catch (\PhpAmqpLib\Exception\AMQPConnectionClosedException $exception) {
+            call_user_func([get_called_class(), 'error'], new \RuntimeException(json_encode(['message' => "rabbitmq server has gone away",]), JSON_UNESCAPED_UNICODE));
+            static::close();
+            sleep(static::getSleepTime());
+            static::make();
+            static::consumeDelay();
         }
-
         /** 关闭队列 */
         static::close();
     }
 
-    /** 处理错误消息 */
-    public abstract static function error(\RuntimeException $exception);
-
     /**
      * 投递消息
-     * @param array $msg 消息内容
-     * @param int $time 延迟时间
-     * @return void
+     * @param array $msg 消息体
+     * @param int $time 延迟时间 需要安装延迟插件
+     * @return bool true表示投递成功 false表示投递失败
      * @throws \Exception
      */
     public static function publish(array $msg, int $time = 0)
     {
-        static::sendDelay(json_encode($msg), $time);
+        /** 投递消息不尝试重连，因为本来就是削峰，提升响应速度 */
+        static::$maxRetryConnect = 0;
+        return static::sendDelay(json_encode($msg, JSON_UNESCAPED_UNICODE), $time);
     }
 
     /**
