@@ -74,7 +74,28 @@ abstract class   Client implements RabbiMQInterface
         }
         /**  创建一个rabbitmq连接*/
         try {
-            static::$connection = new AMQPStreamConnection(static::$host, static::$port, static::$user, static::$pass);
+            //static::$connection = new AMQPStreamConnection(static::$host, static::$port, static::$user, static::$pass);
+            /** 更新设置心跳为30秒发送一次 */
+            static::$connection = new AMQPStreamConnection(
+                static::$host,
+                static::$port,
+                static::$user,
+                static::$pass,
+                '/',                     // vhost (默认 '/')
+                false,                   // insist (默认 false)
+                'AMQPLAIN',              // login_method (默认 'AMQPLAIN')
+                null,                    // login_response (默认 null)
+                'en_US',                 // locale (默认 'en_US')
+                3.0,                     // connection_timeout (默认 3.0 秒)
+                3.0,                     // read_write_timeout (默认 3.0 秒)
+                null,                    // context (默认 null)
+                false,                   // keepalive (默认 false)
+                30,                      // heartbeat (默认 0，这里设为 30 秒)
+                0.0,                     // channel_rpc_timeout (默认 0.0)
+                null,                    // ssl_protocol (默认 null)
+                null                     // config (默认 null)
+            );
+
         } catch (\Exception|\RuntimeException|AMQPRuntimeException|AMQPConnectionBlockedException $exception) {
             throw new \RuntimeException($exception->getMessage());
         }
