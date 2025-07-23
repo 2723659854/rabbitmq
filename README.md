@@ -110,7 +110,7 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
 
 #### 投递消息 publish
 编写一个publish.php文件，内容如下：
-```php 
+```php
 <?php
 
 namespace xiaosongshu\test;
