@@ -27,6 +27,10 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
 
     /** @var string $pass 服务器登陆密码 */
     public static $pass = "123456";
+    /** 指定队列名称 */
+    public static $queueName = 'xiaosongshu\test\Demo';
+    /** 指定交换机名称 */
+    public static $exchangeName = 'xiaosongshu\test\Demo';
 
     /** @var bool $enableDlx 是否开启死信队列 */
     public static $enableDlx = true;

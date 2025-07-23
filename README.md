@@ -17,6 +17,9 @@ composer require xiaosongshu/rabbitmq
 #### 定义一个队列 queue
 
 编写一个客户端server.php文件，内容如下：
+```text
+PS：强烈建议为每一个队列指定队列名称和交换机名称，因为实际生产环境下，会存在消费者交叉嵌套的情况。比如在A消费者内给B投递消息，B消费者给C投递消息，以此类推。作者本人的项目确实存在这种逻辑，所以强烈建议指定消费者的队列名和交换机名，否则会消息投递错误，会非常混乱。
+```
 ```php
 <?php
 
@@ -35,7 +38,7 @@ require_once __DIR__ . '/vendor/autoload.php';
 class Demo extends \Xiaosongshu\Rabbitmq\Client
 {
     /** 以下是rabbitmq配置 ，请填写您自己的配置 */
-    
+
     /** @var string $host 服务器地址 */
     public static $host = "192.168.110.72";
 
@@ -47,6 +50,10 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
 
     /** @var string $pass 服务器登陆密码 */
     public static $pass = "123456";
+    /** 指定队列名称 */
+    public static $queueName = 'xiaosongshu\test\Demo';
+    /** 指定交换机名称 */
+    public static $exchangeName = 'xiaosongshu\test\Demo';
 
     /** @var bool $enableDlx 是否开启死信队列 */
     public static $enableDlx = true;
@@ -99,8 +106,6 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
         return self::ACK;
     }
 }
-
-
 ```
 
 #### 投递消息 publish
@@ -187,7 +192,15 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
 
     /** @var string $pass 服务器登陆密码 */
     public static $pass = "guest";
-
+    
+     /** 指定队列名称 */
+    public static $queueName = 'app\commands\Demo';
+    /** 指定交换机名称 */
+    public static $exchangeName = 'app\commands\Demo';
+    
+    /** @var bool $enableDlx 是否开启死信队列 */
+    public static $enableDlx = true;
+    
     /**
      * 业务处理
      * @param array $params
@@ -222,7 +235,7 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
 
 ```
 将消费者写入到命令行工具里面。
-```php 
+```php
 <?php
 
 namespace app\commands;
@@ -302,6 +315,9 @@ class RabbitmqService extends \Xiaosongshu\Rabbitmq\Client
     /** 指定队列 */
     public static $queueName = "app\service\RabbitmqService";
 
+    /** @var bool $enableDlx 是否开启死信队列 */
+    public static $enableDlx = true;
+    
     /**
      * 业务处理
      * @param array $params
