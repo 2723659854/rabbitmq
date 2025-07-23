@@ -137,8 +137,6 @@ require_once __DIR__ . '/sever.php';
 
 /** 开启消费，本函数为阻塞，后面的代码不会执行 */
 \xiaosongshu\test\Demo::consume();
-/** 开启消费，消费5个消息后自动退出，用于测试 */
-// \xiaosongshu\test\Demo::consume(5);
 ```
 如果你的操作系统是windows环境，而且你如果开启了死信队列。那么还需要建一个文件consumeD.php用来消费死信队列的消息，内容如下：
 ```php
@@ -261,9 +259,13 @@ class QueueController extends Controller
     }
 }
 ```
-开启消费者命令 consume
+开启消费者命令 consume(你可以开启多个窗口执行此命令实现开启多个消费者的目的)，
 ```bash
 php yii queue/index
+```
+如果你在linux环境下想实现无人值守模式，命令如下（你可以多次执行此命令，实现开启多个消费者的目的）：
+```bash
+nohup php yii queue/index >/dev/null 2>&1 &
 ```
 投递消息方式如下，你可以在任何地方包括但不限于控制器或命令行，写入以下命令：
 ```php
@@ -384,11 +386,11 @@ class CheckRabbitmq extends Command
     }
 }
 ```
-开启消费命令如下：
+开启消费命令如下(你可以开启多个窗口执行此命令实现开启多个消费者的目的)：
 ```bash
 php think check:rabbitmq
 ```
-如果需要在linux上已无人值守模式运行，命令如下
+如果需要在linux上已无人值守模式运行，命令如下(你可以多次执行此命令，实现开启多个消费者的目的)：
 ```bash 
 nohup php think check:rabbitmq >/dev/null 2>&1 &
 ```
@@ -428,11 +430,11 @@ class CheckRabbitmq extends Command
 }
 
 ```
-开启死信消费者命令是：
+开启死信消费者命令是(你可以开启多个窗口执行此命令实现开启多个消费者的目的)：
 ```bash
 php think check:rabbitmqD
 ```
-若需要在linux环境下无人值守模式运行，命令如下：
+若需要在linux环境下无人值守模式运行，命令如下(你可以多次执行此命令，实现开启多个消费者的目的)：
 ```bash
 nohup php think check:rabbitmqD >/dev/null 2>&1 &
 ```
