@@ -20,7 +20,7 @@ namespace app\commands;
 
 require_once __DIR__.'/vendor/autoload.php';
 
-class Demo extends \Xiaosongshu\Rabbitmq\Client
+class Demo extends \Xiaosongshu\Rabbitmq\ClientOld
 {
 
     /** 以下是rabbitmq配置 ，请填写您自己的配置 */
@@ -123,6 +123,7 @@ php yii queue/index
 php demo.php
 ```
 测试文件代码如下：
+
 ```php
 <?php
 
@@ -133,7 +134,7 @@ require_once __DIR__ . '/vendor/autoload.php';
  * demo
  * @purpose 定义一个队列演示
  */
-class Demo extends \Xiaosongshu\Rabbitmq\Client
+class Demo extends \Xiaosongshu\Rabbitmq\ClientOld
 {
 
     /** 以下是rabbitmq配置 ，请填写您自己的配置 */
