@@ -47,7 +47,7 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client2
      */
     public static function error(\RuntimeException $exception)
     {
-        var_dump("捕获到了异常",$exception->getMessage());
+        var_dump("捕获到了异常",$exception->getMessage(),$exception->getLine(),$exception->getFile());
     }
 
     public static function dlxHandle(array $data)

@@ -48,15 +48,27 @@ abstract class Client2 implements RabbiMQInterface
     protected static $IS_NOT_WINDOWS = false;
 
     /**
+     * 判断是否是windows系统
+     * @return bool
+     */
+    protected static function isNotWindows()
+    {
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN')
+        {
+            static::$IS_NOT_WINDOWS = true;
+        }else{
+            static::$IS_NOT_WINDOWS = false;
+        }
+        return static::$IS_NOT_WINDOWS;
+    }
+
+    /**
      * 构建队列
      * @return bool
      */
     private static function make()
     {
-        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN')
-        {
-            static::$IS_NOT_WINDOWS = true;
-        }
+        static::isNotWindows();
         /** 如果已连接服务端，则不要重新连接 */
         if (static::isConnected()) {
             return true;
@@ -70,6 +82,7 @@ abstract class Client2 implements RabbiMQInterface
 
         $connecting = true;
 
+        /** 先强制关闭所有连接，清理资源 */
         static::close();
         if (!static::$type) {
             static::$type = static::EXCHANGETYPE_DIRECT;
@@ -82,6 +95,7 @@ abstract class Client2 implements RabbiMQInterface
             static::$queueName = $className;
         }
 
+        /** 如果开启了信心队列，那么相关配置如下 */
         if (static::$enableDlx) {
             if (!static::$dlxExchangeName) {
                 static::$dlxExchangeName = static::$exchangeName . "_dlx";
@@ -95,16 +109,16 @@ abstract class Client2 implements RabbiMQInterface
         }
 
         try {
-            // 1. 创建新连接和通道
+            /** 创建新连接和通道 */
             static::$connection = new AMQPStreamConnection(
                 static::$host, static::$port, static::$user, static::$pass,
                 '/', false, 'AMQPLAIN', null, 'en_US', 1.0,
                 3.0, null, false, static::$heartbeat, 0.0, null, null
             );
-
+            /** 获取信道 */
             static::$channel = static::$connection->channel();
 
-            // 2. 声明业务交换机
+            /** 声明业务交换机 */
             static::$channel->exchange_declare(
                 static::$exchangeName,
                 static::$type ?: static::EXCHANGETYPE_DIRECT,
@@ -113,31 +127,32 @@ abstract class Client2 implements RabbiMQInterface
                 false
             );
 
-            // 3. 准备队列参数
+            /** 准备队列参数 ，普通的业务队列的相关参数 */
             $queueArguments = new AMQPTable();
             if (static::$enableDlx) {
                 $queueArguments->set('x-dead-letter-exchange', static::$dlxExchangeName);
                 $queueArguments->set('x-dead-letter-routing-key', static::$dlxRoutingKey);
-                $queueArguments->set('x-message-ttl', 3);
+                /** 此处定义普通消息的生命周期为30秒 ，30秒足够队列来处理了，如果时间过长，那么就应该考虑使用脚本来处理，而不是队列 */
+                $queueArguments->set('x-message-ttl', 30);
             }
 
-            // 4. 处理业务队列（存在即使用，不存在则创建）
+            /** 处理业务队列（存在即使用，不存在则创建） */
             try {
                 // 先尝试被动声明，检查队列是否存在
                 static::$channel->queue_declare(
                     static::$queueName,
-                    true,  // passive=true
-                    true,  // durable
-                    false,
-                    false
+                    true,  // passive=true （被动声明）
+                    true,  // durable 持久化存储，防止消息丢失
+                    false, // 不排他性
+                    false, // 不自动删除
                 );
                 //echo "业务队列已存在，直接使用: " . static::$queueName . PHP_EOL;
             } catch (AMQPProtocolChannelException $e) {
                 if ($e->getCode() == 404) {
-                    // 队列不存在，创建新队列
+                    /** 队列不存在，创建新队列 */
                     static::$channel->queue_declare(
                         static::$queueName,
-                        false,
+                        false, // 主动申明一个队列，并带上死信队列的相关配置，当消息过期或者消费者出了意外挂了，消息就交给死信队列处理
                         true,
                         false,
                         false,
@@ -150,20 +165,20 @@ abstract class Client2 implements RabbiMQInterface
                 }
             }
 
-            // 绑定业务队列到交换机（无论队列是否已存在都需要绑定）
+            /** 绑定业务队列到交换机（无论队列是否已存在都需要绑定） */
             static::$channel->queue_bind(
                 static::$queueName,
                 static::$exchangeName,
                 static::$queueName
             );
 
-            // 5. 处理死信队列（仅在启用时）
+            /** 处理死信队列（仅在启用时），死信队列和业务队列使用不同的信道，这里是为了防止逻辑混乱，防止排队等待，实际可以共用一个信道 */
             if (static::$enableDlx) {
-                // 创建新的通道专门用于死信队列操作
+                /** 创建新的通道专门用于死信队列操作 */
                 $dlxChannel = static::$connection->channel();
 
                 try {
-                    // 声明死信交换机
+                    /** 声明死信交换机 */
                     $dlxChannel->exchange_declare(
                         static::$dlxExchangeName,
                         static::EXCHANGETYPE_DIRECT,
@@ -172,13 +187,15 @@ abstract class Client2 implements RabbiMQInterface
                         false
                     );
 
-                    // 准备死信队列参数
+                    /** 准备死信队列参数 */
                     $dlxQueueArguments = new AMQPTable();
                     if (static::$dlxMessageTtl > 0) {
+                        /** 设置死信队列消息的有效期 */
                         $dlxQueueArguments->set('x-message-ttl', static::$dlxMessageTtl);
                     }
 
                     // 处理死信队列（存在即使用，不存在则创建）
+                    /** 首先检测队列是否存在 */
                     try {
                         $dlxChannel->queue_declare(
                             static::$dlxQueueName,
@@ -190,7 +207,7 @@ abstract class Client2 implements RabbiMQInterface
                         //echo "死信队列已存在，直接使用: " . static::$dlxQueueName . PHP_EOL;
                     } catch (AMQPProtocolChannelException $e) {
                         if ($e->getCode() == 404) {
-                            // 死信队列不存在，创建新队列
+                            /** 死信队列不存在，创建新队列 */
                             $dlxChannel->queue_declare(
                                 static::$dlxQueueName,
                                 false,
@@ -206,7 +223,7 @@ abstract class Client2 implements RabbiMQInterface
                         }
                     }
 
-                    // 绑定死信队列（无论队列是否已存在都需要绑定）
+                    /** 绑定死信队列（无论队列是否已存在都需要绑定） */
                     $dlxChannel->queue_bind(
                         static::$dlxQueueName,
                         static::$dlxExchangeName,
@@ -214,35 +231,29 @@ abstract class Client2 implements RabbiMQInterface
                     );
                 } finally {
                     // 关闭死信专用通道
+                    /** 申明死信队列后，因为死信队列的消费是另外一个进程，所以当前信道不再使用，为了防止资源浪费，则关闭死信队列的信道，而业务队列的信道需要立刻使用，比如投递或者消费，所以不能关闭 */
                     if ($dlxChannel->is_open()) {
                         $dlxChannel->close();
                     }
                 }
             }
-
+            /** 保存连接信息 */
             static::$instance = static::$connection;
             static::$hasRetryConnect = 0;
             $connecting = false;
             return true;
 
         } catch (\Exception $exception) {
+            /** 自动重连 */
             $connecting = false;
             static::close();
             if (static::$hasRetryConnect < static::$maxRetryConnect) {
                 static::$hasRetryConnect++;
-                call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                    json_encode([
-                        'message' => "尝试重连RabbitMQ（" . static::$hasRetryConnect . "次）：" . $exception->getMessage()
-                    ], JSON_UNESCAPED_UNICODE)
-                ));
+                call_user_func([get_called_class(), 'error'], new \RuntimeException("尝试重连RabbitMQ（" . static::$hasRetryConnect . "次）"));
                 sleep(static::getSleepTime());
                 return static::make();
             } else {
-                call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                    json_encode([
-                        'message' => "RabbitMQ连接失败：" . $exception->getMessage()
-                    ], JSON_UNESCAPED_UNICODE)
-                ));
+                call_user_func([get_called_class(), 'error'], new \RuntimeException("RabbitMQ连接失败"));
                 return false;
             }
         }
@@ -251,9 +262,9 @@ abstract class Client2 implements RabbiMQInterface
     /**
      * 开启死信队列消费
      * @return void
-     * @note 主要适用于于windows
+     * @note 主要适用于于windows，简化的消费者方法名称，方便调用
      */
-    public static function consumeDead()
+    public static function consumeD()
     {
         static::startDlxConsumer();
     }
@@ -264,87 +275,105 @@ abstract class Client2 implements RabbiMQInterface
      */
     private static function startDlxConsumer()
     {
+        /** 不开启死信队列则不处理 */
         if (!static::$enableDlx) {
             return;
         }
 
         // Windows 系统处理
         if (!static::$IS_NOT_WINDOWS) {
-            // 在Windows下直接启动消费循环，不创建子进程
+            /** 在Windows下直接启动消费循环，不创建子进程 */
             static::runDlxConsumer();
             return;
         }
 
         // Linux 系统处理
+        /** 如果存在死信进程，并且拥有对子进程的控制权，那么 就返回，这里发送的是0只用于检查，不是9杀死 */
         if (static::$dlxPid > 0 && \posix_kill(static::$dlxPid, 0)) {
             return;
         }
-
+        /** 创建子进程用于死信队列，防止普通业务队列阻塞影响死信队列 */
         $pid = \pcntl_fork();
         if ($pid == -1) {
-            call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                json_encode(['message' => "创建死信消费子进程失败"], JSON_UNESCAPED_UNICODE)
-            ));
+            call_user_func([get_called_class(), 'error'], new \RuntimeException("创建死信消费子进程失败"));
             return;
         } elseif ($pid == 0) {
+            /** 子进程 负责死信队列 消费 */
             static::runDlxConsumer();
             exit(0);
         } else {
+            /** 主进程记录死信队列的进程id */
             static::$dlxPid = $pid;
         }
     }
 
+
     /**
-     * 执行死信队列消费逻辑（公共方法，Windows/Linux共用）
+     * 死信队列消费者逻辑
      * @return void
      */
     private static function runDlxConsumer()
     {
-        while (true) {
-            if (!static::isConnected()) {
-                static::make();
-                if (!static::isConnected()) {
-                    sleep(3);
-                    continue;
-                }
-            }
+        $retryCount = 0;
+        $maxRetry = 5; // 最大连续重试次数
+        $backoffTime = 3; // 初始退避时间（秒）
 
+        while (true) {
             try {
+                // 检查连接，未连接则重建（确保每次重试都是全新连接）
+                if (!static::isConnected()) {
+                    // 强制关闭可能残留的旧连接
+                    static::close();
+                    static::make();
+
+                    if (!static::isConnected()) {
+                        throw new \RuntimeException("连接建立失败，将重试");
+                    }
+
+                    // 重置重试计数（连接成功则清零）
+                    $retryCount = 0;
+                    $backoffTime = 3;
+                }
+
                 $dlxCallback = function ($msg) {
                     $dlxMsg = json_decode($msg->body, true);
-
                     $class = get_called_class();
+
                     try {
-                        if (method_exists($class, 'dlxHandle')) {
-                            $result = call_user_func([$class, 'dlxHandle'], $dlxMsg);
-                            if ($result === static::ACK) {
-                                static::$channel->basic_ack($msg->delivery_info['delivery_tag'], false);
-                            } else {
-                                static::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, false);
-                                call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                                    json_encode(['message' => "死信消息处理失败"], JSON_UNESCAPED_UNICODE)
-                                ));
-                            }
-                        } else {
+                        if (!method_exists($class, 'dlxHandle')) {
                             static::$channel->basic_ack($msg->delivery_info['delivery_tag'], false);
-                            call_user_func([get_called_class(), 'error'], new \RuntimeException(
+                            call_user_func([$class, 'error'], new \RuntimeException(
                                 json_encode(['message' => "未实现dlxHandle，自动确认死信"], JSON_UNESCAPED_UNICODE)
+                            ));
+                            return;
+                        }
+
+                        $result = call_user_func([$class, 'dlxHandle'], $dlxMsg);
+                        if ($result === static::ACK) {
+                            static::$channel->basic_ack($msg->delivery_info['delivery_tag'], false);
+                        } else {
+                            // 死信处理失败：根据业务决定是否重新入队（这里保持原逻辑不重新入队）
+                            static::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, false);
+                            call_user_func([$class, 'error'], new \RuntimeException(
+                                json_encode(['message' => "死信消息处理失败"], JSON_UNESCAPED_UNICODE)
                             ));
                         }
                     } catch (\Exception $e) {
                         static::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, false);
-                        call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                            json_encode([
-                                'message' => "死信处理异常：" . $e->getMessage()
-                            ], JSON_UNESCAPED_UNICODE)
+                        call_user_func([$class, 'error'], new \RuntimeException(
+                            json_encode(['message' => "死信处理异常：" . $e->getMessage()], JSON_UNESCAPED_UNICODE)
                         ));
                     }
                 };
 
+                /** 这里复用了通用业务队列的信道，原因：信道只负责传输数据 */
+                // 重置消费者配置（确保每次重建都是全新的消费者）
                 static::$channel->basic_qos(0, 1, false);
+                /** 同一个信道上数据的区分是 依靠队列实现的，同一个信道上可以传输多个队列的数据 */
+                /** 这里给信道绑定了队列以及消费者 */
                 static::$channel->basic_consume(
                     static::$dlxQueueName,
-                    static::$dlxQueueName . "_consumer",
+                    static::$dlxQueueName . "_consumer_" . uniqid(), // 消费者标签加唯一ID，避免冲突
                     false,
                     false,
                     false,
@@ -352,20 +381,25 @@ abstract class Client2 implements RabbiMQInterface
                     $dlxCallback
                 );
 
-                while (count(static::$channel->callbacks)) {
-                    static::$channel->wait();
-                }
+                // 简化监听逻辑：持续等待消息，异常则直接抛出由外层处理
+                static::$channel->wait();
+
             } catch (\Exception $e) {
-                call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                    json_encode([
-                        'message' => "死信消费异常：" . $e->getMessage()
-                    ], JSON_UNESCAPED_UNICODE)
-                ));
+                $retryCount++;
+                $errorMsg = "死信消费异常（第{$retryCount}次重试）：" . $e->getMessage();
+                call_user_func([get_called_class(), 'error'], new \RuntimeException($errorMsg));
+                // 关闭当前连接（无论是否成功，强制清理）
                 static::close();
-                sleep(3);
+                // 退避策略：连续失败次数越多，等待时间越长（最多等待30秒）
+                if ($retryCount >= $maxRetry) {
+                    $backoffTime = min($backoffTime * 2, 30);
+                }
+                sleep($backoffTime);
             }
         }
     }
+
+
 
     /**
      * 监控子进程死信队列，但是只能用于linux，不可用于windows
@@ -392,13 +426,13 @@ abstract class Client2 implements RabbiMQInterface
 
     /**
      * 开启消费
-     * @param int $count
+     * @param int $count 指定本次消费数量
      * @return void
      */
     public static function consume(int $count = 0)
     {
+        /** 如果指定了本次消费消息数量后退出，则初始化总量和剩余可消费量 */
         static::$total = static::$remain = $count;
-
 
         if (static::$enableDlx) {
             /** 非windows系统 开启子进程消费死信队列数据 */
@@ -408,6 +442,7 @@ abstract class Client2 implements RabbiMQInterface
         }
 
         while (true) {
+
             /** 非windows系统才监控死信队列 */
             if (static::$enableDlx && static::$IS_NOT_WINDOWS) {
                 static::monitorDlxProcess();
@@ -447,20 +482,14 @@ abstract class Client2 implements RabbiMQInterface
                         } else {
                             /** 核心业务逻辑方法不存在 拒绝，但不重新投递，因为没有消费方法，投递也是浪费资源，不能解决根本问题 */
                             static::$channel->basic_reject($msg->delivery_info['delivery_tag'], false);
-                            call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                                json_encode([
-                                    'message' => "未实现handle方法，拒绝消息"
-                                ], JSON_UNESCAPED_UNICODE)
-                            ));
+                            call_user_func([get_called_class(), 'error'], new \RuntimeException("未实现handle方法，拒绝消息"));
                         }
-                    } catch (\Exception $exception) {
+                    } catch (\Throwable  $exception) {# 这里使用Throwable囊括所有的php异常和错误，防止进程中断
+                        /** 这里是防止因为逻辑错误抛出异常导致进程中断 */
                         static::$channel->basic_reject($msg->delivery_info['delivery_tag'], false);
-                        call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                            json_encode([
-                                'message' => "业务消费异常：" . $exception->getMessage()
-                            ], JSON_UNESCAPED_UNICODE)
-                        ));
+                        call_user_func([get_called_class(), 'error'], new \RuntimeException("业务消费异常：" . $exception->getMessage()." [消息体]: ".$msg->body));
                     }
+                    /** 如果执行了消费数量，那么需要减少数量 */
                     if (static::$total > 0) {
                         static::$remain--;
                     }
@@ -490,6 +519,9 @@ abstract class Client2 implements RabbiMQInterface
                     }
                 } else {
                     /** 如果没有限制，那么就一直消费 */
+                    # static::$channel->callbacks 获取当前信道上已注册的消费者
+                    // 如果还有存活的已注册的消费者，那么就要继续等待消息，如果消费者 被手动取消basic_cancel，或者被服务器连接断开，消费者被清空
+                    // 那么这个时候就不需要等待接受新消息，退出监听
                     while (count(static::$channel->callbacks)) {
                         if (static::$IS_NOT_WINDOWS){
                             static::monitorDlxProcess();
@@ -499,31 +531,47 @@ abstract class Client2 implements RabbiMQInterface
                 }
                 break;
             } catch (\PhpAmqpLib\Exception\AMQPConnectionClosedException $exception) {
-                call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                    json_encode([
-                        'message' => "业务消费连接断开：" . $exception->getMessage()
-                    ], JSON_UNESCAPED_UNICODE)
-                ));
+                /** 连接断开则重连 */
+                call_user_func([get_called_class(), 'error'], new \RuntimeException("业务消费连接断开：" . $exception->getMessage()));
+                static::close();
+                sleep(static::getSleepTime());
+            }catch (\Throwable $exception) {
+                /** 其他类型的异常，先处理错误 */
+                call_user_func([get_called_class(), 'error'], new \RuntimeException($exception->getMessage()));
+                // 默认这些错误不可恢复，比如代码错误，需要修复代码
+                $isPossiblyRecoverable = false;
+                if ($exception instanceof \PhpAmqpLib\Exception\AMQPRuntimeException) {
+                    // RabbitMQ相关异常：部分是临时的（如信道满了），这种等一下可以恢复，
+                    $isPossiblyRecoverable = true;
+                }
+
+                // 确认不能恢复，则断开连接
+                if (!$isPossiblyRecoverable ) {
+                    call_user_func([get_called_class(), 'error'], new \RuntimeException("判断为致命错误（非临时异常），进程退出。详情：".$exception->getMessage()));
+                    break;
+                }
+
+                // 临时错误：继续重连
                 static::close();
                 sleep(static::getSleepTime());
             }
         }
 
         if (static::$enableDlx && static::$dlxPid > 0) {
-            \posix_kill(static::$dlxPid, SIGTERM);
-            call_user_func([get_called_class(), 'error'], new \RuntimeException(
-                json_encode([
-                    'message' => "关闭死信子进程（PID：" . static::$dlxPid . "）"
-                ], JSON_UNESCAPED_UNICODE)
-            ));
+            /** linux环境自动杀死子进程，windows环境是独立的进程不需要杀死 */
+            if (static::isNotWindows()){
+                \posix_kill(static::$dlxPid, SIGTERM);
+                call_user_func([get_called_class(), 'error'], new \RuntimeException("关闭死信子进程（PID：" . static::$dlxPid . "）"));
+            }
         }
+        /** 回收连接 */
         static::close();
     }
 
     /**
      * 创建消息
-     * @param string $msg
-     * @param int $time
+     * @param string $msg 消息
+     * @param int $time 延迟时间  需要安装扩展
      * @return object|AMQPMessage
      */
     private static function createMessageDelay(string $msg, int $time = 0): object
@@ -539,12 +587,13 @@ abstract class Client2 implements RabbiMQInterface
 
     /**
      * 投递消息
-     * @param string $msg
-     * @param int $delay
-     * @return bool
+     * @param string $msg 消息
+     * @param int $delay 延迟时间
+     * @return bool 是否投递成功
      */
     private static function sendDelay(string $msg, int $delay = 0)
     {
+        /** 构建连接 */
         if (!static::isConnected()) {
             static::make();
             if (!self::isConnected()) {
@@ -569,7 +618,9 @@ abstract class Client2 implements RabbiMQInterface
     {
         if (static::$instance && static::$instance->isConnected()) {
             try {
+                /** 关闭信道 */
                 static::$channel->close();
+                /** 关闭连接 */
                 static::$connection->close();
             } catch (\Exception $e) {
                 // 忽略关闭异常
@@ -601,8 +652,8 @@ abstract class Client2 implements RabbiMQInterface
 
     /**
      * 投递消息
-     * @param array $msg
-     * @param int $time
+     * @param array $msg 消息
+     * @param int $time 延迟时间
      * @return bool
      */
     public static function publish(array $msg, int $time = 0)
