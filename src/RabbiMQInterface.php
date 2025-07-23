@@ -8,5 +8,5 @@ interface RabbiMQInterface
 
     public static function error(\RuntimeException $exception);
 
-    public static function dlxHandle(array $data);
+    public static function dlxHandle(array $params):int;
 }

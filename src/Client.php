@@ -11,6 +11,7 @@ use PhpAmqpLib\Wire\AMQPTable;
  * @purpose rabbitmq客户端
  * @author yanglong
  * @time 2025年7月23日14:07:46
+ * @note 重构新版本队列客户端，主要是为了解决客户端因为业务卡死而掉线的问题。
  */
 abstract class Client implements RabbiMQInterface
 {
