@@ -28,9 +28,9 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     /** @var string $pass 服务器登陆密码 */
     public static $pass = "123456";
     /** 指定队列名称 */
-    public static $queueName = 'xiaosongshu\test\Demo';
+    public static $queueName = 'xiaosongshu\test\Demo3';
     /** 指定交换机名称 */
-    public static $exchangeName = 'xiaosongshu\test\Demo';
+    public static $exchangeName = 'xiaosongshu\test\Demo3';
 
     /** @var bool $enableDlx 是否开启死信队列 */
     public static $enableDlx = true;
@@ -79,7 +79,7 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     public static function dlxHandle(array $params):int
     {
         //todo 这里写死信队列的处理逻辑，若不开启死信队列，则不需要写任何逻辑，直接返回ACK即可
-        //var_dump("死信队列处理",$params);
+        var_dump("死信队列处理",$params);
         return self::ACK;
     }
 }

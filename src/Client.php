@@ -174,32 +174,43 @@ abstract class Client implements RabbiMQInterface
             }
 
             /** 处理业务队列（存在即使用，不存在则创建） */
-            try {
-                /** 先尝试被动声明，检查队列是否存在 */
-                static::$channel->queue_declare(
-                    static::$queueName,
-                    true,  // passive=true （被动声明）
-                    true,  // durable 持久化存储，防止消息丢失
-                    false, // 不排他性
-                    false, // 不自动删除
-                );
-            } catch (AMQPProtocolChannelException $e) {
-                if ($e->getCode() == 404) {
-                    /** 队列不存在，创建新队列 */
-                    static::$channel->queue_declare(
-                        static::$queueName,
-                        false, // 主动申明一个队列，并带上死信队列的相关配置，当消息过期或者消费者出了意外挂了，消息就交给死信队列处理
-                        true,
-                        false,
-                        false,
-                        false,
-                        $queueArguments
-                    );
-                } else {
-                    /** 创建队列失败 */
-                    throw $e;
-                }
-            }
+//            try {
+//                /** 先尝试被动声明，检查队列是否存在 */
+//                static::$channel->queue_declare(
+//                    static::$queueName,
+//                    true,  // passive=true （被动声明）
+//                    true,  // durable 持久化存储，防止消息丢失
+//                    false, // 不排他性
+//                    false, // 不自动删除
+//                );
+//            } catch (AMQPProtocolChannelException $e) {
+//                if ($e->getCode() == 404) {
+//                    /** 队列不存在，创建新队列 */
+//                    static::$channel->queue_declare(
+//                        static::$queueName,
+//                        false, // 主动申明一个队列，并带上死信队列的相关配置，当消息过期或者消费者出了意外挂了，消息就交给死信队列处理
+//                        true,
+//                        false,
+//                        false,
+//                        false,
+//                        $queueArguments
+//                    );
+//                } else {
+//                    /** 创建队列失败 */
+//                    throw $e;
+//                }
+//            }
+
+            // 直接主动创建队列（确保队列被创建）
+            static::$channel->queue_declare(
+                static::$queueName,
+                false, // passive=false（主动创建）
+                true,
+                false,
+                false,
+                false,
+                $queueArguments
+            );
 
             /** 绑定业务队列到交换机（无论队列是否已存在都需要绑定） */
             static::$channel->queue_bind(
@@ -231,31 +242,42 @@ abstract class Client implements RabbiMQInterface
                     }
 
                     /** 首先检测队列是否存在 */
-                    try {
-                        $dlxChannel->queue_declare(
-                            static::$dlxQueueName,
-                            true,  // passive=true
-                            true,  // durable
-                            false,
-                            false
-                        );
-                    } catch (AMQPProtocolChannelException $e) {
-                        if ($e->getCode() == 404) {
-                            /** 死信队列不存在，创建新队列 */
-                            $dlxChannel->queue_declare(
-                                static::$dlxQueueName,
-                                false,
-                                true,
-                                false,
-                                false,
-                                false,
-                                $dlxQueueArguments
-                            );
-                        } else {
-                            /** 创建队列失败 */
-                            throw $e;
-                        }
-                    }
+//                    try {
+//                        $dlxChannel->queue_declare(
+//                            static::$dlxQueueName,
+//                            true,  // passive=true
+//                            true,  // durable
+//                            false,
+//                            false
+//                        );
+//                    } catch (AMQPProtocolChannelException $e) {
+//                        if ($e->getCode() == 404) {
+//                            /** 死信队列不存在，创建新队列 */
+//                            $dlxChannel->queue_declare(
+//                                static::$dlxQueueName,
+//                                false,
+//                                true,
+//                                false,
+//                                false,
+//                                false,
+//                                $dlxQueueArguments
+//                            );
+//                        } else {
+//                            /** 创建队列失败 */
+//                            throw $e;
+//                        }
+//                    }
+
+                    /** 死信队列不存在，创建新队列 */
+                    $dlxChannel->queue_declare(
+                        static::$dlxQueueName,
+                        false,
+                        true,
+                        false,
+                        false,
+                        false,
+                        $dlxQueueArguments
+                    );
 
                     /** 绑定死信队列（无论队列是否已存在都需要绑定） */
                     $dlxChannel->queue_bind(
