@@ -384,7 +384,7 @@ abstract class Client implements RabbiMQInterface
                 /** 这里给信道绑定了队列以及消费者 */
                 static::$channel->basic_consume(
                     static::$dlxQueueName,
-                    static::$dlxQueueName . "_consumer_" . uniqid(), // 消费者标签加唯一ID，避免冲突
+                    static::$dlxQueueName . "_consumer", // 消费者标签加唯一ID，避免冲突
                     false,
                     false,
                     false,
