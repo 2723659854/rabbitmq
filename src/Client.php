@@ -6,6 +6,7 @@ use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Exception\AMQPProtocolChannelException;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
+use Throwable;
 
 /**
  * @purpose rabbitmq客户端
@@ -170,54 +171,31 @@ abstract class Client implements RabbiMQInterface
                 $queueArguments->set('x-dead-letter-exchange', static::$dlxExchangeName);
                 $queueArguments->set('x-dead-letter-routing-key', static::$dlxRoutingKey);
                 /** 此处定义普通消息的生命周期为30秒 ，30秒足够队列来处理了，如果时间过长，那么就应该考虑使用脚本来处理，而不是队列 */
-                $queueArguments->set('x-message-ttl', 30);
+                $queueArguments->set('x-message-ttl', 30000);
             }
 
-            /** 处理业务队列（存在即使用，不存在则创建） */
-//            try {
-//                /** 先尝试被动声明，检查队列是否存在 */
-//                static::$channel->queue_declare(
-//                    static::$queueName,
-//                    true,  // passive=true （被动声明）
-//                    true,  // durable 持久化存储，防止消息丢失
-//                    false, // 不排他性
-//                    false, // 不自动删除
-//                );
-//            } catch (AMQPProtocolChannelException $e) {
-//                if ($e->getCode() == 404) {
-//                    /** 队列不存在，创建新队列 */
-//                    static::$channel->queue_declare(
-//                        static::$queueName,
-//                        false, // 主动申明一个队列，并带上死信队列的相关配置，当消息过期或者消费者出了意外挂了，消息就交给死信队列处理
-//                        true,
-//                        false,
-//                        false,
-//                        false,
-//                        $queueArguments
-//                    );
-//                } else {
-//                    /** 创建队列失败 */
-//                    throw $e;
-//                }
-//            }
+            try {
+                // 直接主动创建队列（确保队列被创建）
+                static::$channel->queue_declare(
+                    static::$queueName,
+                    false, // passive=false（主动创建）
+                    true,
+                    false,
+                    false,
+                    false,
+                    $queueArguments
+                );
+                /** 绑定业务队列到交换机（无论队列是否已存在都需要绑定） */
+                static::$channel->queue_bind(
+                    static::$queueName,
+                    static::$exchangeName,
+                    static::$queueName
+                );
+            }catch (\Exception|\Throwable $exception){
+                /** 发生了异常，通知用户立即处理 ，只提示错误，不提任何建议，由用户自己斟酌处理 */
+                call_user_func([get_called_class(), 'error'], new \RuntimeException($exception->getMessage()));
+            }
 
-            // 直接主动创建队列（确保队列被创建）
-            static::$channel->queue_declare(
-                static::$queueName,
-                false, // passive=false（主动创建）
-                true,
-                false,
-                false,
-                false,
-                $queueArguments
-            );
-
-            /** 绑定业务队列到交换机（无论队列是否已存在都需要绑定） */
-            static::$channel->queue_bind(
-                static::$queueName,
-                static::$exchangeName,
-                static::$queueName
-            );
 
             /** 处理死信队列（仅在启用时），死信队列和业务队列使用不同的信道，这里是为了防止逻辑混乱，防止排队等待，实际可以共用一个信道 */
             if (static::$enableDlx) {
@@ -225,6 +203,7 @@ abstract class Client implements RabbiMQInterface
                 $dlxChannel = static::$connection->channel();
 
                 try {
+
                     /** 声明死信交换机 */
                     $dlxChannel->exchange_declare(
                         static::$dlxExchangeName,
@@ -240,33 +219,6 @@ abstract class Client implements RabbiMQInterface
                         /** 设置死信队列消息的有效期 */
                         $dlxQueueArguments->set('x-message-ttl', static::$dlxMessageTtl);
                     }
-
-                    /** 首先检测队列是否存在 */
-//                    try {
-//                        $dlxChannel->queue_declare(
-//                            static::$dlxQueueName,
-//                            true,  // passive=true
-//                            true,  // durable
-//                            false,
-//                            false
-//                        );
-//                    } catch (AMQPProtocolChannelException $e) {
-//                        if ($e->getCode() == 404) {
-//                            /** 死信队列不存在，创建新队列 */
-//                            $dlxChannel->queue_declare(
-//                                static::$dlxQueueName,
-//                                false,
-//                                true,
-//                                false,
-//                                false,
-//                                false,
-//                                $dlxQueueArguments
-//                            );
-//                        } else {
-//                            /** 创建队列失败 */
-//                            throw $e;
-//                        }
-//                    }
 
                     /** 死信队列不存在，创建新队列 */
                     $dlxChannel->queue_declare(
@@ -285,6 +237,9 @@ abstract class Client implements RabbiMQInterface
                         static::$dlxExchangeName,
                         static::$dlxRoutingKey
                     );
+                }catch (\Exception|\Throwable $exception){
+                    /** 发生了异常，通知用户立即处理 ，只提示错误，不提任何建议，由用户自己斟酌处理 */
+                    call_user_func([get_called_class(), 'error'], new \RuntimeException($exception->getMessage()));
                 } finally {
                     /** 申明死信队列后，因为死信队列的消费是另外一个进程，所以当前信道不再使用，为了防止资源浪费，则关闭死信队列的信道，而业务队列的信道需要立刻使用，比如投递或者消费，所以不能关闭 */
                     if ($dlxChannel->is_open()) {

@@ -28,12 +28,12 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     /** @var string $pass 服务器登陆密码 */
     public static $pass = "123456";
     /** 指定队列名称 */
-    public static $queueName = 'xiaosongshu\test\Demo3';
+    public static $queueName = 'xiaosongshu\test\Demo';
     /** 指定交换机名称 */
-    public static $exchangeName = 'xiaosongshu\test\Demo3';
+    public static $exchangeName = 'xiaosongshu\test\Demo';
 
     /** @var bool $enableDlx 是否开启死信队列 */
-    public static $enableDlx = true;
+    public static $enableDlx = false;
 
     /**
      * 业务处理
@@ -66,7 +66,7 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     public static function error(\RuntimeException $exception)
     {
         //todo 这里写对于异常的处理，比如日志记录，发送短信通知、邮件通知等等，或者人工介入处理
-        //var_dump("发生了异常",$exception->getMessage());
+        var_dump("发生了异常",$exception->getMessage());
     }
 
     /**
