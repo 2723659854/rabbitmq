@@ -350,6 +350,17 @@ abstract class Client implements RabbiMQInterface
                     $backoffTime = 3;
                 }
 
+                /** 取消死信队列的已注册的消费者 */
+                $dlxConsumerPrefix = static::$dlxQueueName . "_consumer_";
+                foreach (static::$channel->callbacks as $consumerTag => $_) {
+                    // 只取消死信队列的消费者（标签以死信前缀开头）
+                    if (strpos($consumerTag, $dlxConsumerPrefix) === 0) {
+                        static::$channel->basic_cancel($consumerTag, true);
+                        // 从本地回调列表中移除（同步状态）
+                        unset(static::$channel->callbacks[$consumerTag]);
+                    }
+                }
+
                 /** 构建死信队列消费者逻辑 */
                 $dlxCallback = function ($msg) {
                     $dlxMsg = json_decode($msg->body, true);
@@ -384,7 +395,7 @@ abstract class Client implements RabbiMQInterface
                 /** 这里给信道绑定了队列以及消费者 */
                 static::$channel->basic_consume(
                     static::$dlxQueueName,
-                    static::$dlxQueueName . "_consumer", // 消费者标签加唯一ID，避免冲突
+                    static::$dlxQueueName . "_consumer_" . uniqid(), // 消费者标签加唯一ID，避免冲突
                     false,
                     false,
                     false,
@@ -463,6 +474,8 @@ abstract class Client implements RabbiMQInterface
                     continue;
                 }
             }
+
+
 
             try {
                 /** 构建回调函数 */
