@@ -470,8 +470,10 @@ abstract class Client implements RabbiMQInterface
         if (empty(static::$queueName)){
             static::$queueName = get_called_class();
         }
-        cli_set_process_title(static::$queueName);
-
+        /** 非windows系统才设置主进程名称 */
+        if (static::$IS_NOT_WINDOWS){
+            @cli_set_process_title(static::$queueName);
+        }
         while (true) {
 
             /** 非windows系统才监控死信队列 */
