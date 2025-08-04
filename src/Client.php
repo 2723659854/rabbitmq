@@ -466,6 +466,11 @@ abstract class Client implements RabbiMQInterface
                 static::startDlxConsumer();
             }
         }
+        /** 主进程设置名称 */
+        if (empty(static::$queueName)){
+            static::$queueName = get_called_class();
+        }
+        cli_set_process_title(static::$queueName);
 
         while (true) {
 
