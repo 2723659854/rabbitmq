@@ -275,9 +275,13 @@ nohup php yii queue/index >/dev/null 2>&1 &
 ```
 注：如果你需要开启多个消费者，那么可以在多个窗口执行开启消费者命令即可。当然你也可以使用多进程来处理。
 #### 关闭消费者
-
-```php
-\app\commands\Demo::close();
+关闭消费者，在windows/linux普通环境下，你只需要在cli窗口输入`ctrl`+`c`组合键直接关闭，若你使用的是linux无人值守模式，那么需要杀死消费者进程，首先查询消费者PID
+```bash
+ps -ef|grep "queue/index"
+```
+然后使用kill命令杀死进程即可，命令如下
+```bash
+kill -9 PID
 ```
 ####  thinkphp中的应用举例
 
@@ -444,6 +448,15 @@ nohup php think check:rabbitmqD >/dev/null 2>&1 &
 ```php
 RabbitmqService::publish(['file'=>$file, 'content'=>$content]);
 ```
+#### 关闭消费者
+关闭消费者，在windows/linux普通环境下，你只需要在cli窗口输入`ctrl`+`c`组合键直接关闭，若你使用的是linux无人值守模式，那么需要杀死消费者进程，首先查询消费者PID
+```bash
+ps -ef|grep "check:rabbitmqD"
+```
+然后使用kill命令杀死进程即可，命令如下
+```bash
+kill -9 PID
+```
 作者尽量将本插件的使用方法贴出了示例，是希望各位用户明白使用方法，但是天下框架何其多，也不可能给所有的框架写示例。当明白了使用方法的时候，任何框架都可以嫁接进去使用。
 当然了，希望你不要照搬我的示例，因为我的代码仅仅是示例，可能不完全符合你的业务需求。
 ### 异常 Exception
@@ -453,3 +466,14 @@ RabbitmqService::publish(['file'=>$file, 'content'=>$content]);
 #### 若需要使用延迟队列，那么rabbitmq服务需要安装延迟插件，否则会报错
 
 ##### 联系作者：2723659854@qq.com ，你也可以直接提<a href="https://github.com/2723659854/rabbitmq/issues" >issues</a>
+
+### 一键搭建rabbitmq服务
+我们可以使用docker容器一键搭建rabbitmq服务，其中<br>
+`-p 5671:5671 -p 5672:5672 -p 15671:15671 -p 15672:15672 -p 61613:61613`是端口映射(-p 宿主机端口:容器内服务端口)，<br>
+`/d/rabbitmq/:/var/log/rabbitmq/`是目录挂载（目录映射 宿主机目录：容器内目录，请根据实际工作环境修改），<br>
+`-e RABBITMQ_DEFAULT_USER=admin`是rabbitmq的登录用户名，你可以根据你的需求修改<br>
+`-e RABBITMQ_DEFAULT_PASS=123456`是你的rabbitmq的登录密码，你可以根据需求修改。
+```bash
+docker run -d --restart always --name faster-rabbitmq -p 5671:5671 -p 5672:5672 -p 15671:15671 -p 15672:15672 -p 61613:61613 -v /d/rabbitmq/:/var/log/rabbitmq/ -e RABBITMQ_DEFAULT_USER=admin -e RABBITMQ_DEFAULT_PASS=123456 -e RABBITMQ_DEFAULT_VHOST=/ rabbitmq:3.8-management-alpine
+```
+

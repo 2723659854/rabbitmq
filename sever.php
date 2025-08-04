@@ -33,7 +33,7 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     public static $exchangeName = 'xiaosongshu\test\Demo';
 
     /** @var bool $enableDlx 是否开启死信队列 */
-    public static $enableDlx = false;
+    public static $enableDlx = true;
 
     /**
      * 业务处理
@@ -46,14 +46,8 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     {
         // todo 这里需要编写你的正常业务处理逻辑，当前仅为示例代码
         var_dump("正常队列处理",$params);
-        if (isset($params['id'])){
-            if ($params['id']%3 ==0){
-                /** 实际场景不可以抛出任何异常，应用捕获所有异常并处理 ，以免引起程序崩溃，虽然底层已经做了兜底 */
-                throw new \Exception("模拟程序故障，抛出异常。");
-            }
-        }
         # 模拟业务逻辑阻塞
-        sleep(4);
+        sleep(10);
         /** 成功，返回ack */
         return self::ACK;
     }

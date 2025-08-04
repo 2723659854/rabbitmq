@@ -89,11 +89,10 @@ abstract class Client implements RabbiMQInterface
      */
     protected static function isNotWindows()
     {
-        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN')
-        {
-            static::$IS_NOT_WINDOWS = true;
-        }else{
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
             static::$IS_NOT_WINDOWS = false;
+        } else {
+            static::$IS_NOT_WINDOWS = true;
         }
         return static::$IS_NOT_WINDOWS;
     }
@@ -191,7 +190,7 @@ abstract class Client implements RabbiMQInterface
                     static::$exchangeName,
                     static::$queueName
                 );
-            }catch (\Exception|\Throwable $exception){
+            } catch (\Exception|\Throwable $exception) {
                 /** 发生了异常，通知用户立即处理 ，只提示错误，不提任何建议，由用户自己斟酌处理 */
                 call_user_func([get_called_class(), 'error'], new \RuntimeException($exception->getMessage()));
             }
@@ -237,7 +236,7 @@ abstract class Client implements RabbiMQInterface
                         static::$dlxExchangeName,
                         static::$dlxRoutingKey
                     );
-                }catch (\Exception|\Throwable $exception){
+                } catch (\Exception|\Throwable $exception) {
                     /** 发生了异常，通知用户立即处理 ，只提示错误，不提任何建议，由用户自己斟酌处理 */
                     call_user_func([get_called_class(), 'error'], new \RuntimeException($exception->getMessage()));
                 } finally {
@@ -369,7 +368,7 @@ abstract class Client implements RabbiMQInterface
                     try {
                         if (!method_exists($class, 'dlxHandle')) {
                             static::$channel->basic_ack($msg->delivery_info['delivery_tag'], false);
-                            call_user_func([$class, 'error'], new \RuntimeException("未实现dlxHandle，自动确认死信"." [消息体]: ".$msg->body));
+                            call_user_func([$class, 'error'], new \RuntimeException("未实现dlxHandle，自动确认死信" . " [消息体]: " . $msg->body));
                             return;
                         }
                         /** 处理异常业务逻辑 */
@@ -379,12 +378,12 @@ abstract class Client implements RabbiMQInterface
                         } else {
                             /** 消费失败则重新入队，交给下一个死信消费者处理 */
                             static::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, true);
-                            call_user_func([$class, 'error'], new \RuntimeException("死信消息处理失败"." [消息体]: ".$msg->body));
+                            call_user_func([$class, 'error'], new \RuntimeException("死信消息处理失败" . " [消息体]: " . $msg->body));
                         }
                     } catch (\Throwable $e) {
                         /** 方法不存在，代码有错误等等异常行为，已经引起消费者崩溃了，那么就没有必要再次投递，赶紧修改代码吧 */
                         static::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, false);
-                        call_user_func([$class, 'error'], new \RuntimeException("死信处理异常：" . $e->getMessage()." [消息体]: ".$msg->body));
+                        call_user_func([$class, 'error'], new \RuntimeException("死信处理异常：" . $e->getMessage() . " [消息体]: " . $msg->body));
                     }
                 };
 
@@ -403,8 +402,13 @@ abstract class Client implements RabbiMQInterface
                     $dlxCallback
                 );
 
-                /** 一直监听等待消息，永不退出 */
-                static::$channel->wait();
+                while (count(static::$channel->callbacks)) {
+                    /** 一直监听等待消息，永不退出 */
+                    static::$channel->wait();
+                    /** 切换cpu */
+                    usleep(1);
+                }
+
 
             } catch (\Exception $e) {
                 $retryCount++;
@@ -420,7 +424,6 @@ abstract class Client implements RabbiMQInterface
             }
         }
     }
-
 
 
     /**
@@ -451,7 +454,7 @@ abstract class Client implements RabbiMQInterface
     {
         /** 如果指定了本次消费消息数量后退出，则初始化总量和剩余可消费量 */
         static::$total = static::$remain = $count;
-
+        static::isNotWindows();
         if (static::$enableDlx) {
             /** 非windows系统 开启子进程消费死信队列数据 */
             if (static::$IS_NOT_WINDOWS) {
@@ -474,8 +477,6 @@ abstract class Client implements RabbiMQInterface
                     continue;
                 }
             }
-
-
 
             try {
                 /** 构建回调函数 */
@@ -502,12 +503,12 @@ abstract class Client implements RabbiMQInterface
                         } else {
                             /** 核心业务逻辑方法不存在 拒绝，但不重新投递，因为没有消费方法，投递也是浪费资源，不能解决根本问题 */
                             static::$channel->basic_reject($msg->delivery_info['delivery_tag'], false);
-                            call_user_func([get_called_class(), 'error'], new \RuntimeException("未实现handle方法，拒绝消息"." [消息体]: ".$msg->body));
+                            call_user_func([get_called_class(), 'error'], new \RuntimeException("未实现handle方法，拒绝消息" . " [消息体]: " . $msg->body));
                         }
                     } catch (\Throwable  $exception) {# 这里使用Throwable囊括所有的php异常和错误，防止进程中断
                         /** 因为代码错误导致程序崩溃，拒绝再次投递，以免引起其他消费者崩溃。赶紧修改代码吧 */
                         static::$channel->basic_reject($msg->delivery_info['delivery_tag'], false);
-                        call_user_func([get_called_class(), 'error'], new \RuntimeException("业务消费异常：" . $exception->getMessage()." [消息体]: ".$msg->body));
+                        call_user_func([get_called_class(), 'error'], new \RuntimeException("业务消费异常：" . $exception->getMessage() . " [消息体]: " . $msg->body));
                     }
                     /** 如果执行了消费数量，那么需要减少数量 */
                     if (static::$total > 0) {
@@ -532,10 +533,12 @@ abstract class Client implements RabbiMQInterface
                 if (static::$total) {
                     /** 没次消费都要判断剩余可消费数 */
                     while (static::$remain > 0 && count(static::$channel->callbacks)) {
-                        if (static::$IS_NOT_WINDOWS){
+                        if (static::$IS_NOT_WINDOWS) {
                             static::monitorDlxProcess();
                         }
                         static::$channel->wait();
+                        /** 切换cpu */
+                        usleep(1);
                     }
                 } else {
                     /** 如果没有限制，那么就一直消费 */
@@ -543,10 +546,12 @@ abstract class Client implements RabbiMQInterface
                     // 如果还有存活的已注册的消费者，那么就要继续等待消息，如果消费者 被手动取消basic_cancel，或者被服务器连接断开，消费者被清空
                     // 那么这个时候就不需要等待接受新消息，退出监听
                     while (count(static::$channel->callbacks)) {
-                        if (static::$IS_NOT_WINDOWS){
+                        if (static::$IS_NOT_WINDOWS) {
                             static::monitorDlxProcess();
                         }
                         static::$channel->wait();
+                        /** 切换cpu */
+                        usleep(1);
                     }
                 }
                 /** 消费完成，则退出循环 */
@@ -556,7 +561,7 @@ abstract class Client implements RabbiMQInterface
                 call_user_func([get_called_class(), 'error'], new \RuntimeException("业务消费连接断开：" . $exception->getMessage()));
                 static::close();
                 sleep(static::getSleepTime());
-            }catch (\Throwable $exception) {
+            } catch (\Throwable $exception) {
                 /** 其他类型的异常，先处理错误 */
                 call_user_func([get_called_class(), 'error'], new \RuntimeException($exception->getMessage()));
 
@@ -569,8 +574,8 @@ abstract class Client implements RabbiMQInterface
                 }
 
                 // 确认不能恢复，则断开连接
-                if (!$isPossiblyRecoverable ) {
-                    call_user_func([get_called_class(), 'error'], new \RuntimeException("判断为致命错误（非临时异常），进程退出。详情：".$exception->getMessage()));
+                if (!$isPossiblyRecoverable) {
+                    call_user_func([get_called_class(), 'error'], new \RuntimeException("判断为致命错误（非临时异常），进程退出。详情：" . $exception->getMessage()));
                     break;
                 }
 
@@ -582,8 +587,8 @@ abstract class Client implements RabbiMQInterface
 
         if (static::$enableDlx && static::$dlxPid > 0) {
             /** linux环境自动杀死子进程，windows环境是独立的进程不需要杀死 */
-            if (static::isNotWindows()){
-                \posix_kill(static::$dlxPid, SIGTERM);
+            if (static::isNotWindows()) {
+                \posix_kill(static::$dlxPid, \SIGTERM);
                 call_user_func([get_called_class(), 'error'], new \RuntimeException("关闭死信子进程（PID：" . static::$dlxPid . "）"));
             }
         }
@@ -671,7 +676,7 @@ abstract class Client implements RabbiMQInterface
     private static function getSleepTime()
     {
         /** 最大休眠60秒，确保不会频繁请求服务端造成资源浪费 */
-        return min(static::$hasRetryConnect * 5 + rand(0, 5),60);
+        return min(static::$hasRetryConnect * 5 + rand(0, 5), 60);
     }
 
     /**
