@@ -277,7 +277,7 @@ nohup php yii queue/index >/dev/null 2>&1 &
 #### 关闭消费者
 关闭消费者，在windows/linux普通环境下，你只需要在cli窗口输入`ctrl`+`c`组合键直接关闭，若你使用的是linux无人值守模式，那么需要杀死消费者进程，首先查询消费者PID
 ```bash
-ps -ef|grep "queue/index"
+ps -ef|grep "app\commands\Demo"
 ```
 然后使用kill命令杀死进程即可，(若开启了死信队列，需要先杀死主队列进程，然后才可以杀死死信队列进程，否则主队列会自动恢复死信队列)命令如下
 ```bash
@@ -451,7 +451,7 @@ RabbitmqService::publish(['file'=>$file, 'content'=>$content]);
 #### 关闭消费者
 关闭消费者，在windows/linux普通环境下，你只需要在cli窗口输入`ctrl`+`c`组合键直接关闭，若你使用的是linux无人值守模式，那么需要杀死消费者进程，首先查询消费者PID
 ```bash
-ps -ef|grep "check:rabbitmqD"
+ps -ef|grep "app\service\RabbitmqService"
 ```
 然后使用kill命令杀死进程即可，(若开启了死信队列，需要先杀死主队列进程，然后才可以杀死死信队列进程，否则主队列会自动恢复死信队列)命令如下
 ```bash
