@@ -46,10 +46,16 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     {
         // todo 这里需要编写你的正常业务处理逻辑，当前仅为示例代码
         var_dump("正常队列处理",$params);
+        static::log(getmypid(),"正常消费",$params);
         # 模拟业务逻辑阻塞
         sleep(10);
         /** 成功，返回ack */
         return self::ACK;
+    }
+
+    public static function log(int $pid ,string $message,array $param)
+    {
+        file_put_contents(__DIR__.'/log.txt',date("Y-m-d H:i:s")." 进程 [{$pid}] 消息：".$message." 参数：".json_encode($param,JSON_UNESCAPED_UNICODE)."\r\n",FILE_APPEND);
     }
 
     /**
@@ -74,6 +80,7 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     {
         //todo 这里写死信队列的处理逻辑，若不开启死信队列，则不需要写任何逻辑，直接返回ACK即可
         var_dump("死信队列处理",$params);
+        static::log(getmypid(),"死信消费",$params);
         return self::ACK;
     }
 }

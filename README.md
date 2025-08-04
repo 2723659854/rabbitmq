@@ -279,7 +279,7 @@ nohup php yii queue/index >/dev/null 2>&1 &
 ```bash
 ps -ef|grep "queue/index"
 ```
-然后使用kill命令杀死进程即可，命令如下
+然后使用kill命令杀死进程即可，(若开启了死信队列，需要先杀死主队列进程，然后才可以杀死死信队列进程，否则主队列会自动恢复死信队列)命令如下
 ```bash
 kill -9 PID
 ```
@@ -453,7 +453,7 @@ RabbitmqService::publish(['file'=>$file, 'content'=>$content]);
 ```bash
 ps -ef|grep "check:rabbitmqD"
 ```
-然后使用kill命令杀死进程即可，命令如下
+然后使用kill命令杀死进程即可，(若开启了死信队列，需要先杀死主队列进程，然后才可以杀死死信队列进程，否则主队列会自动恢复死信队列)命令如下
 ```bash
 kill -9 PID
 ```

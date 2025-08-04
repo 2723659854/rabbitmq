@@ -305,18 +305,24 @@ abstract class Client implements RabbiMQInterface
         if (static::$dlxPid > 0 && \posix_kill(static::$dlxPid, 0)) {
             return;
         }
+        /** 处理队列名称为空的场景 */
+        if (empty(static::$queueName)){
+            static::$queueName = get_called_class();
+        }
         /** 创建子进程用于死信队列，防止普通业务队列阻塞影响死信队列 */
         $pid = \pcntl_fork();
         if ($pid == -1) {
             call_user_func([get_called_class(), 'error'], new \RuntimeException("创建死信消费子进程失败"));
             return;
         } elseif ($pid == 0) {
+            cli_set_process_title(static::$queueName."_dlx");
             /** 子进程 负责死信队列 消费 */
             static::runDlxConsumer();
             exit(0);
         } else {
             /** 主进程记录死信队列的进程id */
             static::$dlxPid = $pid;
+            cli_set_process_title(static::$queueName);
         }
     }
 
@@ -331,7 +337,6 @@ abstract class Client implements RabbiMQInterface
         $retryCount = 0;
         $maxRetry = 5; // 最大连续重试次数
         $backoffTime = 3; // 初始退避时间（秒）
-
         while (true) {
             try {
                 // 检查连接，未连接则重建（确保每次重试都是全新连接）
