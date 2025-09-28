@@ -12,7 +12,7 @@ require_once __DIR__ . '/vendor/autoload.php';
  * @note 当前版本客户端支持死信队列。自动维护客户端登录。
  * @warning 不要在任何地方使用exit函数，以免引起客户端掉线。
  */
-class Demo extends \Xiaosongshu\Rabbitmq\Client
+class Demo4 extends \Xiaosongshu\Rabbitmq\Client
 {
     /** 以下是rabbitmq配置 ，请填写您自己的配置 */
 
@@ -28,9 +28,9 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     /** @var string $pass 服务器登陆密码 */
     public static $pass = "123456";
     /** 指定队列名称 */
-    public static $queueName = 'xiaosongshu\test\Demo';
+//    public static $queueName = 'xiaosongshu\test\Demo4';
     /** 指定交换机名称 */
-    public static $exchangeName = 'xiaosongshu\test\Demo';
+//    public static $exchangeName = 'xiaosongshu\test\Demo4';
 
     /** @var bool $enableDlx 是否开启死信队列 */
     public static $enableDlx = true;
@@ -45,10 +45,10 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
     public static function handle(array $params): int
     {
         // todo 这里需要编写你的正常业务处理逻辑，当前仅为示例代码
-        var_dump("正常队列处理",$params);
-        static::log(getmypid(),"正常消费",$params);
+        var_dump("正常队列处理2",$params);
+        static::log(getmypid(),"正常消费2",$params);
         # 模拟业务逻辑阻塞
-        sleep(10);
+        //sleep(10);
         /** 成功，返回ack */
         return self::ACK;
     }

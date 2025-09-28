@@ -3,10 +3,8 @@
 namespace Xiaosongshu\Rabbitmq;
 
 use PhpAmqpLib\Connection\AMQPStreamConnection;
-use PhpAmqpLib\Exception\AMQPProtocolChannelException;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
-use Throwable;
 
 /**
  * @purpose rabbitmq客户端
@@ -24,16 +22,23 @@ abstract class Client implements RabbiMQInterface
     public static $user = "guest";
     /** @var string 服务器登陆密码 */
     public static $pass = "guest";
-    /** @var \PhpAmqpLib\Channel\AbstractChannel|\PhpAmqpLib\Channel\AMQPChannel 渠道通道 */
-    protected static $channel;
-    /** @var AMQPStreamConnection rabbitmq连接 */
-    protected static $connection;
+
+    /**
+     * @var array 存储每个队列的独立信道（key：connectKey，value：AMQPChannel）
+     * @note 新增：与connections一一对应，避免信道共用导致数据混乱
+     */
+    protected static $channels = [];
+    /**
+     * @var array 存储每个队列的独立连接（key：connectKey，value：AMQPStreamConnection）
+     * @note 原有：已实现按key区分连接
+     */
+    protected static $connections = [];
 
     /** @var int 过期时间 */
     public static $timeOut = 0;
-    /** @var string 交换机名称 */
+    /** @var string 交换机名称（子类可自定义，未定义则用类名） */
     public static $exchangeName = "";
-    /** @var string 队列名称 */
+    /** @var string 队列名称（子类可自定义，未定义则用类名） */
     public static $queueName = "";
     /** @var string $type 分发方式 */
     public static $type = "";
@@ -50,11 +55,9 @@ abstract class Client implements RabbiMQInterface
     const NACK = 2;
     /** 消费失败，支持重复投递一次 */
     const REJECT = 3;
-    /** rabbitmq链接 */
-    protected static $instance = null;
 
     /** 重新连接最大尝试次数，可能rabbitmq服务网络跳动等异常情况，所以设置大一点 */
-    protected static $maxRetryConnect = 50;
+    protected static $maxRetryConnect = 5;
 
     /** 已经尝试重连次数 */
     protected static $hasRetryConnect = 0;
@@ -70,11 +73,11 @@ abstract class Client implements RabbiMQInterface
 
     /** 是否开启死信队列 */
     public static $enableDlx = false;
-    /** 死信队列交换机 */
+    /** 死信队列交换机（未定义则用「业务交换机+_dlx」） */
     public static $dlxExchangeName = "";
-    /** 死信队列名称 */
+    /** 死信队列名称（未定义则用「业务队列+_dlx」） */
     public static $dlxQueueName = "";
-    /** 死信队列路由 */
+    /** 死信队列路由（未定义则用「业务队列+_dlx」） */
     public static $dlxRoutingKey = "";
     /** 死信消息生命周期 */
     public static $dlxMessageTtl = 0;
@@ -82,6 +85,12 @@ abstract class Client implements RabbiMQInterface
     protected static $dlxPid = 0;
     /** 操作系统不是windows */
     protected static $IS_NOT_WINDOWS = false;
+
+    /**
+     * @var array 存储每个队列的连接状态（key：connectKey，value：bool）
+     * @note 原有：已实现按key区分连接中状态
+     */
+    protected static $connecting = [];
 
     /**
      * 判断是否是windows系统
@@ -98,130 +107,143 @@ abstract class Client implements RabbiMQInterface
     }
 
     /**
-     * 连接服务器并创建队列
-     * @return bool
+     * 获取队列唯一标识（交换机+队列名）
+     * @return array [交换机名, 队列名, 连接key]
+     * @note 原有：逻辑保留，确保每个队列的key唯一
+     */
+    protected static function getQueueName()
+    {
+        // 动态生成交换机名：子类未定义则用类名
+        $exchangeName = static::$exchangeName ?: static::class;
+        // 动态生成队列名：子类未定义则用类名
+        $queueName = static::$queueName ?: static::class;
+        // 连接key：确保唯一（交换机名@队列名）
+        $connectKey = $exchangeName . '@' . $queueName;
+
+        return [$exchangeName, $queueName, $connectKey];
+    }
+
+    /**
+     * 连接服务器并创建队列（每个队列独立连接/信道）
+     * @return bool 连接+绑定是否成功
+     * @note 核心完善：按connectKey管理连接/信道，确保每个队列独立绑定
      */
     private static function make()
     {
+        // 1. 获取当前队列的唯一标识
+        [$exchangeName, $queueName, $connectKey] = static::getQueueName();
         /** 检测操作系统 */
         static::isNotWindows();
 
-        /** 如果已连接服务端，则不要重新连接 */
-        if (static::isConnected()) {
+        // 2. 检查是否已连接：若连接有效且信道打开，直接返回
+        if (static::isConnected($connectKey)) {
             return true;
         }
 
-        /** 正在连接中，不要重复连接 */
-        static $connecting = false;
-        if ($connecting) {
-            return true;
+        // 3. 处理并发连接：避免同一队列重复创建连接
+        // 初始化连接状态（未定义则设为false）
+        if (!isset(static::$connecting[$connectKey])) {
+            static::$connecting[$connectKey] = false;
         }
-        /** 标记当前正在连接中 */
-        $connecting = true;
-
-        /** 先强制关闭所有连接，清理资源 */
-        static::close();
-        if (!static::$type) {
-            static::$type = static::EXCHANGETYPE_DIRECT;
+        // 若正在连接中，等待直至连接完成（最多等待5秒，避免死等）
+        $waitCount = 0;
+        while (static::$connecting[$connectKey] && $waitCount < 50) {
+            \usleep(100000); // 每次等待100ms
+            $waitCount++;
         }
-        $className = get_called_class();
-        if (!static::$exchangeName) {
-            static::$exchangeName = $className;
-        }
-        if (!static::$queueName) {
-            static::$queueName = $className;
+        // 等待后仍在连接中，视为失败
+        if (static::$connecting[$connectKey]) {
+            static::error(new \RuntimeException("队列[{$queueName}]连接中，请勿重复请求"));
+            return false;
         }
 
-        /** 如果开启了信心队列，那么其相关配置如下 */
-        if (static::$enableDlx) {
-            if (!static::$dlxExchangeName) {
-                static::$dlxExchangeName = static::$exchangeName . "_dlx";
-            }
-            if (!static::$dlxQueueName) {
-                static::$dlxQueueName = static::$queueName . "_dlx";
-            }
-            if (!static::$dlxRoutingKey) {
-                static::$dlxRoutingKey = static::$queueName . "_dlx";
-            }
-        }
+        // 4. 标记当前队列开始连接
+        static::$connecting[$connectKey] = true;
+        // 先清理当前队列的旧资源（避免残留连接/信道）
+        static::close($connectKey);
+        // 初始化分发方式（未定义则用direct）
+        $exchangeType = static::$type ?: static::EXCHANGETYPE_DIRECT;
+
+        // 5. 处理死信队列的动态标识（未定义则自动生成）
+        $dlxExchangeName = static::$dlxExchangeName ?: $exchangeName . "_dlx";
+        $dlxQueueName = static::$dlxQueueName ?: $queueName . "_dlx";
+        $dlxRoutingKey = static::$dlxRoutingKey ?: $queueName . "_dlx";
 
         try {
-            /** 创建新连接和通道，默认连接超时1秒，读写超时3秒，心跳间隔最大60秒 */
-            static::$connection = new AMQPStreamConnection(
+            // 6. 创建当前队列的独立连接
+            static::$connections[$connectKey] = new AMQPStreamConnection(
                 static::$host, static::$port, static::$user, static::$pass,
                 '/', false, 'AMQPLAIN', null, 'en_US', 1.0,
                 3.0, null, false, static::$heartbeat, 0.0, null, null
             );
-            /** 获取信道 */
-            static::$channel = static::$connection->channel();
 
-            /** 声明业务交换机 */
-            static::$channel->exchange_declare(
-                static::$exchangeName,
-                static::$type ?: static::EXCHANGETYPE_DIRECT,
-                false,
-                true,
-                false
+            // 7. 创建当前队列的独立信道（每个连接对应一个信道）
+            $channel = static::$connections[$connectKey]->channel();
+            static::$channels[$connectKey] = $channel; // 存入信道数组
+
+            // 8. 声明当前队列的业务交换机（幂等操作：已存在则忽略）
+            $channel->exchange_declare(
+                $exchangeName,  // 用动态生成的交换机名（非static::$exchangeName）
+                $exchangeType,
+                false,          // passive：不检查是否存在（直接创建）
+                true,           // durable：持久化（重启后不丢失）
+                false           // auto_delete：不自动删除
             );
 
-            /** 准备队列参数 ，普通的业务队列的相关参数 */
+            // 9. 准备业务队列参数（含死信配置）
             $queueArguments = new AMQPTable();
             if (static::$enableDlx) {
-                $queueArguments->set('x-dead-letter-exchange', static::$dlxExchangeName);
-                $queueArguments->set('x-dead-letter-routing-key', static::$dlxRoutingKey);
-                /** 此处定义普通消息的生命周期为30秒 ，30秒足够队列来处理了，如果时间过长，那么就应该考虑使用脚本来处理，而不是队列 */
-                $queueArguments->set('x-message-ttl', 30000);
+                $queueArguments->set('x-dead-letter-exchange', $dlxExchangeName);
+                $queueArguments->set('x-dead-letter-routing-key', $dlxRoutingKey);
+                $queueArguments->set('x-message-ttl', 30000); // 业务消息30秒过期
             }
 
+            // 10. 声明并绑定业务队列（幂等操作）
             try {
-                // 直接主动创建队列（确保队列被创建）
-                static::$channel->queue_declare(
-                    static::$queueName,
-                    false, // passive=false（主动创建）
-                    true,
-                    false,
-                    false,
+                // 声明业务队列
+                $channel->queue_declare(
+                    $queueName,     // 用动态生成的队列名（非static::$queueName）
+                    false,          // passive：不检查是否存在
+                    true,           // durable：持久化
+                    false,          // exclusive：不排他（多消费者可访问）
+                    false,          // auto_delete：不自动删除
                     false,
                     $queueArguments
                 );
-                /** 绑定业务队列到交换机（无论队列是否已存在都需要绑定） */
-                static::$channel->queue_bind(
-                    static::$queueName,
-                    static::$exchangeName,
-                    static::$queueName
+                // 绑定队列到交换机（路由键用队列名，确保精准匹配）
+                $channel->queue_bind(
+                    $queueName,
+                    $exchangeName,
+                    $queueName
                 );
             } catch (\Exception|\Throwable $exception) {
-                /** 发生了异常，通知用户立即处理 ，只提示错误，不提任何建议，由用户自己斟酌处理 */
-                call_user_func([get_called_class(), 'error'], new \RuntimeException($exception->getMessage()));
+                static::error(new \RuntimeException("队列[{$queueName}]绑定失败：" . $exception->getMessage()));
+                throw $exception; // 重新抛出，触发重连逻辑
             }
 
-
-            /** 处理死信队列（仅在启用时），死信队列和业务队列使用不同的信道，这里是为了防止逻辑混乱，防止排队等待，实际可以共用一个信道 */
+            // 11. 处理死信队列（仅在启用时，使用当前队列的连接创建死信信道）
             if (static::$enableDlx) {
-                /** 创建新的通道专门用于死信队列操作 */
-                $dlxChannel = static::$connection->channel();
-
+                // 创建死信专用信道（避免与业务信道混用）
+                $dlxChannel = static::$connections[$connectKey]->channel();
                 try {
-
-                    /** 声明死信交换机 */
+                    // 声明死信交换机
                     $dlxChannel->exchange_declare(
-                        static::$dlxExchangeName,
+                        $dlxExchangeName,
                         static::EXCHANGETYPE_DIRECT,
                         false,
                         true,
                         false
                     );
 
-                    /** 准备死信队列参数 */
+                    // 准备死信队列参数
                     $dlxQueueArguments = new AMQPTable();
                     if (static::$dlxMessageTtl > 0) {
-                        /** 设置死信队列消息的有效期 */
                         $dlxQueueArguments->set('x-message-ttl', static::$dlxMessageTtl);
                     }
 
-                    /** 死信队列不存在，创建新队列 */
+                    // 声明死信队列
                     $dlxChannel->queue_declare(
-                        static::$dlxQueueName,
+                        $dlxQueueName,
                         false,
                         true,
                         false,
@@ -230,43 +252,42 @@ abstract class Client implements RabbiMQInterface
                         $dlxQueueArguments
                     );
 
-                    /** 绑定死信队列（无论队列是否已存在都需要绑定） */
+                    // 绑定死信队列
                     $dlxChannel->queue_bind(
-                        static::$dlxQueueName,
-                        static::$dlxExchangeName,
-                        static::$dlxRoutingKey
+                        $dlxQueueName,
+                        $dlxExchangeName,
+                        $dlxRoutingKey
                     );
                 } catch (\Exception|\Throwable $exception) {
-                    /** 发生了异常，通知用户立即处理 ，只提示错误，不提任何建议，由用户自己斟酌处理 */
-                    call_user_func([get_called_class(), 'error'], new \RuntimeException($exception->getMessage()));
+                    static::error(new \RuntimeException("死信队列[{$dlxQueueName}]绑定失败：" . $exception->getMessage()));
+                    throw $exception;
                 } finally {
-                    /** 申明死信队列后，因为死信队列的消费是另外一个进程，所以当前信道不再使用，为了防止资源浪费，则关闭死信队列的信道，而业务队列的信道需要立刻使用，比如投递或者消费，所以不能关闭 */
+                    // 死信队列声明后关闭信道（消费时会重新创建专属信道）
                     if ($dlxChannel->is_open()) {
                         $dlxChannel->close();
                     }
                 }
             }
-            /** 保存连接信息 */
-            static::$instance = static::$connection;
+
+            // 12. 连接成功：重置重连次数，标记连接完成
             static::$hasRetryConnect = 0;
-            $connecting = false;
+            static::$connecting[$connectKey] = false;
             return true;
 
         } catch (\Exception $exception) {
-            /** 自动重连 */
-            $connecting = false;
-            /** 清理原有的资源 */
-            static::close();
+            // 13. 连接/绑定失败：清理资源，触发重连
+            static::$connecting[$connectKey] = false;
+            static::close($connectKey); // 清理当前队列的旧资源
 
-            /** 如果设置了最大重连次数，那么就一直重连，永不退出，目的是为了客户端自我维护，自动登录，防止因为卡死掉线而不能及时处理消息，如果服务端挂了，则需要手动停止消费者 */
+            // 重试逻辑：未达最大次数则递归重连
             if (static::$maxRetryConnect) {
                 static::$hasRetryConnect++;
-                call_user_func([get_called_class(), 'error'], new \RuntimeException("尝试重连RabbitMQ（" . static::$hasRetryConnect . "次）"));
-                sleep(static::getSleepTime());
-                return static::make();
+                $sleepTime = static::getSleepTime();
+                static::error(new \RuntimeException("队列[{$queueName}]连接失败（第" . static::$hasRetryConnect . "次重试）：" . $exception->getMessage() . "，将等待{$sleepTime}秒后重试"));
+                \sleep($sleepTime);
+                return static::make(); // 递归重连
             } else {
-                /** 尝试完毕，仍无法连接，退出 */
-                call_user_func([get_called_class(), 'error'], new \RuntimeException("RabbitMQ连接失败"));
+                static::error(new \RuntimeException("队列[{$queueName}]重连达最大次数（" . static::$maxRetryConnect . "次），已停止重试"));
                 return false;
             }
         }
@@ -285,151 +306,151 @@ abstract class Client implements RabbiMQInterface
     /**
      * 开启死信队列消费
      * @return void
+     * @note 完善：使用当前队列的connectKey，确保死信消费与业务队列对应
      */
     private static function startDlxConsumer()
     {
-        /** 不开启死信队列则不处理 */
+        // 1. 未启用死信队列则退出
         if (!static::$enableDlx) {
             return;
         }
+        // 2. 获取当前队列的唯一标识
+        [$exchangeName, $queueName, $connectKey] = static::getQueueName();
+        $dlxQueueName = static::$dlxQueueName ?: $queueName . "_dlx";
 
-        // Windows 系统处理
+        // 3. Windows系统：直接启动消费（无进程管理）
         if (!static::$IS_NOT_WINDOWS) {
-            /** 在Windows下直接启动消费循环，不创建子进程 */
-            static::runDlxConsumer();
+            static::runDlxConsumer($connectKey, $dlxQueueName);
             return;
         }
 
-        // Linux 系统处理
-        /** 如果存在死信进程，并且拥有对子进程的控制权，那么 就返回，这里发送的是0只用于检查，不是9杀死 */
+        // 4. Linux系统：通过子进程管理死信消费（避免阻塞业务进程）
+        // 检查子进程是否存活（已存活则不重复创建）
         if (static::$dlxPid > 0 && \posix_kill(static::$dlxPid, 0)) {
+            static::error(new \RuntimeException("死信队列[{$dlxQueueName}]子进程已存在（PID：" . static::$dlxPid . "），无需重复创建"));
             return;
         }
-        /** 处理队列名称为空的场景 */
-        if (empty(static::$queueName)){
-            static::$queueName = get_called_class();
-        }
-        /** 创建子进程用于死信队列，防止普通业务队列阻塞影响死信队列 */
+
+        // 创建子进程
         $pid = \pcntl_fork();
         if ($pid == -1) {
-            call_user_func([get_called_class(), 'error'], new \RuntimeException("创建死信消费子进程失败"));
+            static::error(new \RuntimeException("死信队列[{$dlxQueueName}]创建子进程失败"));
             return;
         } elseif ($pid == 0) {
-            cli_set_process_title(static::$queueName."_dlx");
-            /** 子进程 负责死信队列 消费 */
-            static::runDlxConsumer();
-            exit(0);
+            // 子进程：设置进程标题，启动死信消费
+            \cli_set_process_title("dlx_consumer_" . $dlxQueueName);
+            static::runDlxConsumer($connectKey, $dlxQueueName);
+            exit(0); // 消费结束后退出子进程
         } else {
-            /** 主进程记录死信队列的进程id */
+            // 父进程：记录子进程ID
             static::$dlxPid = $pid;
-            cli_set_process_title(static::$queueName);
+            static::error(new \RuntimeException("死信队列[{$dlxQueueName}]子进程创建成功（PID：" . $pid . "）"));
         }
     }
 
-
     /**
      * 死信队列消费者逻辑
+     * @param string $connectKey 当前队列的连接key
+     * @param string $dlxQueueName 死信队列名
      * @return void
-     * @note 自动重连，不退出，属于兜底操作
+     * @note 完善：绑定当前队列的连接/信道，避免消费其他队列的死信
      */
-    private static function runDlxConsumer()
+    private static function runDlxConsumer(string $connectKey, string $dlxQueueName)
     {
         $retryCount = 0;
         $maxRetry = 5; // 最大连续重试次数
         $backoffTime = 3; // 初始退避时间（秒）
         while (true) {
             try {
-                // 检查连接，未连接则重建（确保每次重试都是全新连接）
-                if (!static::isConnected()) {
-                    // 强制关闭可能残留的旧连接
-                    static::close();
-                    static::make();
-
-                    if (!static::isConnected()) {
-                        throw new \RuntimeException("连接建立失败，将重试");
+                // 1. 确保当前队列的连接有效（无效则重建）
+                if (!static::isConnected($connectKey)) {
+                    static::close($connectKey); // 清理旧资源
+                    if (!static::make()) { // 重建连接+绑定
+                        throw new \RuntimeException("死信队列[{$dlxQueueName}]连接重建失败");
                     }
-
-                    // 重置重试计数（连接成功则清零）
+                    // 连接成功：重置重试计数和退避时间
                     $retryCount = 0;
                     $backoffTime = 3;
                 }
 
-                /** 取消死信队列的已注册的消费者 */
-                $dlxConsumerPrefix = static::$dlxQueueName . "_consumer_";
-                foreach (static::$channel->callbacks as $consumerTag => $_) {
-                    // 只取消死信队列的消费者（标签以死信前缀开头）
+                // 2. 获取当前队列的死信消费信道（从connections数组获取）
+                $channel = static::$channels[$connectKey];
+                if (!$channel || !$channel->is_open()) {
+                    throw new \RuntimeException("死信队列[{$dlxQueueName}]信道已关闭");
+                }
+
+                // 3. 取消当前队列的旧死信消费者（避免重复消费）
+                $dlxConsumerPrefix = $dlxQueueName . "_consumer_";
+                foreach ($channel->callbacks as $consumerTag => $_) {
                     if (strpos($consumerTag, $dlxConsumerPrefix) === 0) {
-                        static::$channel->basic_cancel($consumerTag, true);
-                        // 从本地回调列表中移除（同步状态）
-                        unset(static::$channel->callbacks[$consumerTag]);
+                        $channel->basic_cancel($consumerTag, true);
+                        unset($channel->callbacks[$consumerTag]);
                     }
                 }
 
-                /** 构建死信队列消费者逻辑 */
-                $dlxCallback = function ($msg) {
-                    $dlxMsg = json_decode($msg->body, true);
-                    $class = get_called_class();
-
+                // 4. 死信消费回调逻辑（仅处理当前队列的死信）
+                $dlxCallback = function ($msg) use ($dlxQueueName) {
+                    $dlxMsg = \json_decode($msg->body, true);
                     try {
-                        if (!method_exists($class, 'dlxHandle')) {
-                            static::$channel->basic_ack($msg->delivery_info['delivery_tag'], false);
-                            call_user_func([$class, 'error'], new \RuntimeException("未实现dlxHandle，自动确认死信" . " [消息体]: " . $msg->body));
+                        // 检查是否实现死信处理方法
+                        if (!method_exists(static::class, 'dlxHandle')) {
+                            $msg->delivery_info['channel']->basic_ack($msg->delivery_info['delivery_tag'], false);
+                            static::error(new \RuntimeException("队列[{$dlxQueueName}]未实现dlxHandle方法，自动确认死信：" . $msg->body));
                             return;
                         }
-                        /** 处理异常业务逻辑 */
-                        $result = call_user_func([$class, 'dlxHandle'], $dlxMsg);
+
+                        // 执行死信处理逻辑
+                        $result = static::dlxHandle($dlxMsg);
                         if ($result === static::ACK) {
-                            static::$channel->basic_ack($msg->delivery_info['delivery_tag'], false);
+                            $msg->delivery_info['channel']->basic_ack($msg->delivery_info['delivery_tag'], false);
                         } else {
-                            /** 消费失败则重新入队，交给下一个死信消费者处理 */
-                            static::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, true);
-                            call_user_func([$class, 'error'], new \RuntimeException("死信消息处理失败" . " [消息体]: " . $msg->body));
+                            // 消费失败：重新入队（交给其他死信消费者）
+                            $msg->delivery_info['channel']->basic_nack($msg->delivery_info['delivery_tag'], false, true);
+                            static::error(new \RuntimeException("队列[{$dlxQueueName}]死信处理失败：" . $msg->body));
                         }
                     } catch (\Throwable $e) {
-                        /** 方法不存在，代码有错误等等异常行为，已经引起消费者崩溃了，那么就没有必要再次投递，赶紧修改代码吧 */
-                        static::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, false);
-                        call_user_func([$class, 'error'], new \RuntimeException("死信处理异常：" . $e->getMessage() . " [消息体]: " . $msg->body));
+                        // 致命异常（如代码错误）：拒绝重新入队（避免无限循环）
+                        $msg->delivery_info['channel']->basic_nack($msg->delivery_info['delivery_tag'], false, false);
+                        static::error(new \RuntimeException("队列[{$dlxQueueName}]死信处理异常：" . $e->getMessage() . "，消息：" . $msg->body));
                     }
                 };
 
-                /** 这里复用了通用业务队列的信道，原因：信道只负责传输数据 */
-                // 重置消费者配置（确保每次重建都是全新的消费者）
-                static::$channel->basic_qos(0, 1, false);
-                /** 同一个信道上数据的区分是 依靠队列实现的，同一个信道上可以传输多个队列的数据 */
-                /** 这里给信道绑定了队列以及消费者 */
-                static::$channel->basic_consume(
-                    static::$dlxQueueName,
-                    static::$dlxQueueName . "_consumer_" . uniqid(), // 消费者标签加唯一ID，避免冲突
-                    false,
-                    false,
-                    false,
+                // 5. 配置消费参数（一次处理1条，避免消息堆积）
+                $channel->basic_qos(0, 1, false);
+                // 绑定死信队列到当前信道
+                $channel->basic_consume(
+                    $dlxQueueName,
+                    $dlxConsumerPrefix . uniqid(), // 唯一消费者标签（避免冲突）
+                    false,  // no_local：接收本消费者发送的消息
+                    false,  // no_ack：手动确认（避免消息丢失）
+                    false,  // exclusive：不排他
                     false,
                     $dlxCallback
                 );
 
-                while (count(static::$channel->callbacks)) {
-                    /** 一直监听等待消息，永不退出 */
-                    static::$channel->wait();
-                    /** 切换cpu */
-                    usleep(1);
+                // 6. 持续监听死信消息
+                //static::error(new \RuntimeException("死信队列[{$dlxQueueName}]开始监听（PID：" . getmypid() . "）"));
+                while (\count($channel->callbacks)) {
+                    $channel->wait();
+                    \usleep(1); // 切换CPU，避免占用过高
                 }
-
 
             } catch (\Exception $e) {
+                // 7. 消费异常：重试退避（失败次数越多，等待时间越长）
                 $retryCount++;
-                $errorMsg = "死信消费异常（第{$retryCount}次重试）：" . $e->getMessage();
-                call_user_func([get_called_class(), 'error'], new \RuntimeException($errorMsg));
-                // 关闭当前连接（无论是否成功，强制清理）
-                static::close();
-                // 退避策略：连续失败次数越多，等待时间越长（最多等待30秒）
+                $errorMsg = "死信队列[{$dlxQueueName}]消费异常（第{$retryCount}次重试）：" . $e->getMessage();
+                static::error(new \RuntimeException($errorMsg));
+
+                // 关闭当前连接（下次重试重建）
+                static::close($connectKey);
+                // 退避时间：最大30秒
                 if ($retryCount >= $maxRetry) {
-                    $backoffTime = min($backoffTime * 2, 30);
+                    $backoffTime = \min($backoffTime * 2, 30);
                 }
-                sleep($backoffTime);
+                \sleep($backoffTime);
             }
         }
     }
-
 
     /**
      * 监控子进程死信队列，但是只能用于linux，不可用于windows
@@ -442,11 +463,11 @@ abstract class Client implements RabbiMQInterface
         }
 
         $status = 0;
-        $result = \pcntl_waitpid(static::$dlxPid, $status, WNOHANG);
+        $result = \pcntl_waitpid(static::$dlxPid, $status, \WNOHANG);
         if ($result == static::$dlxPid) {
-            call_user_func([get_called_class(), 'error'], new \RuntimeException("死信队列子进程（" . static::$dlxPid . "）已退出，准备重启"));
+            static::error(new \RuntimeException("死信队列子进程（" . static::$dlxPid . "）已退出，准备重启"));
             static::$dlxPid = 0;
-            static::startDlxConsumer();
+            static::startDlxConsumer(); // 重启死信消费
         }
     }
 
@@ -454,86 +475,94 @@ abstract class Client implements RabbiMQInterface
      * 开启消费
      * @param int $count 指定本次消费数量
      * @return void
+     * @note 完善：使用当前队列的connectKey和信道，避免消费其他队列消息
      */
     public static function consume(int $count = 0)
     {
-        /** 如果指定了本次消费消息数量后退出，则初始化总量和剩余可消费量 */
+        // 1. 初始化消费计数
         static::$total = static::$remain = $count;
         static::isNotWindows();
-        if (static::$enableDlx) {
-            /** 非windows系统 开启子进程消费死信队列数据 */
-            if (static::$IS_NOT_WINDOWS) {
-                static::startDlxConsumer();
-            }
-        }
-        /** 主进程设置名称 */
-        if (empty(static::$queueName)){
-            static::$queueName = get_called_class();
-        }
-        /** 非windows系统才设置主进程名称 */
-        if (static::$IS_NOT_WINDOWS){
-            @cli_set_process_title(static::$queueName);
-        }
-        while (true) {
+        // 2. 获取当前队列的唯一标识
+        [$exchangeName, $queueName, $connectKey] = static::getQueueName();
 
-            /** 非windows系统才监控死信队列 */
+        // 3. 启动死信消费（仅Linux子进程模式）
+        if (static::$enableDlx && static::$IS_NOT_WINDOWS) {
+            static::startDlxConsumer();
+        }
+
+        // 4. 设置主进程标题（Linux）
+        if (empty(static::$queueName)) {
+            static::$queueName = $queueName; // 同步队列名（用于进程标题）
+        }
+        if (static::$IS_NOT_WINDOWS) {
+            @\cli_set_process_title("consumer_" . static::$queueName);
+        }
+
+        while (true) {
+            // 5. 监控死信子进程（Linux）
             if (static::$enableDlx && static::$IS_NOT_WINDOWS) {
                 static::monitorDlxProcess();
             }
 
-            /** 判断是否连接可用 */
-            if (!static::isConnected()) {
-                static::make();
-                if (!static::isConnected()) {
-                    sleep(3);
+            // 6. 确保当前队列的连接有效
+            if (!static::isConnected($connectKey)) {
+                if (!static::make()) {
+                    static::error(new \RuntimeException("队列[{$queueName}]连接无效，3秒后重试"));
+                    \sleep(3);
                     continue;
                 }
             }
 
             try {
-                /** 构建回调函数 */
-                $businessCallback = function ($msg) {
-                    /** 数据解码 */
-                    $params = json_decode($msg->body, true);
+                // 7. 获取当前队列的业务信道
+                $channel = static::$channels[$connectKey];
+                if (!$channel || !$channel->is_open()) {
+                    throw new \RuntimeException("队列[{$queueName}]信道已关闭");
+                }
+
+                // 8. 业务消费回调逻辑
+                $businessCallback = function ($msg) use ($queueName) {
+                    $params = \json_decode($msg->body, true);
                     try {
-                        $class = get_called_class();
-                        if (class_exists($class) && method_exists($class, 'handle')) {
-                            /** 执行业务逻辑 */
-                            $ack = call_user_func([$class, 'handle'], $params);
-                            /** 成功 确认ok */
-                            if ($ack == static::ACK) {
-                                static::$channel->basic_ack($msg->delivery_info['delivery_tag'], false);
-                            }
-                            /** 失败 重新投递 */
-                            if ($ack == static::NACK) {
-                                static::$channel->basic_nack($msg->delivery_info['delivery_tag'], false, true);
-                            }
-                            /** 拒绝消息，重新投递 ，在业务依赖的其他服务不可用等场景的时候拒绝消息，消息就会重新投递分配给其他消费者处理 */
-                            if ($ack == static::REJECT) {
-                                static::$channel->basic_reject($msg->delivery_info['delivery_tag'], true);
-                            }
-                        } else {
-                            /** 核心业务逻辑方法不存在 拒绝，但不重新投递，因为没有消费方法，投递也是浪费资源，不能解决根本问题 */
-                            static::$channel->basic_reject($msg->delivery_info['delivery_tag'], false);
-                            call_user_func([get_called_class(), 'error'], new \RuntimeException("未实现handle方法，拒绝消息" . " [消息体]: " . $msg->body));
+                        // 检查是否实现业务处理方法
+                        if (!\method_exists(static::class, 'handle')) {
+                            $msg->delivery_info['channel']->basic_reject($msg->delivery_info['delivery_tag'], false);
+                            static::error(new \RuntimeException("队列[{$queueName}]未实现handle方法，拒绝消息：" . $msg->body));
+                            return;
                         }
-                    } catch (\Throwable  $exception) {# 这里使用Throwable囊括所有的php异常和错误，防止进程中断
-                        /** 因为代码错误导致程序崩溃，拒绝再次投递，以免引起其他消费者崩溃。赶紧修改代码吧 */
-                        static::$channel->basic_reject($msg->delivery_info['delivery_tag'], false);
-                        call_user_func([get_called_class(), 'error'], new \RuntimeException("业务消费异常：" . $exception->getMessage() . " [消息体]: " . $msg->body));
+
+                        // 执行业务逻辑
+                        $ack = static::handle($params);
+                        if ($ack == static::ACK) {
+                            // 消费成功：确认消息
+                            $msg->delivery_info['channel']->basic_ack($msg->delivery_info['delivery_tag'], false);
+                        } elseif ($ack == static::NACK) {
+                            // 消费失败：重新入队
+                            $msg->delivery_info['channel']->basic_nack($msg->delivery_info['delivery_tag'], false, true);
+                            static::error(new \RuntimeException("队列[{$queueName}]业务处理失败（重新入队）：" . $msg->body));
+                        } elseif ($ack == static::REJECT) {
+                            // 拒绝消息：重新入队（分配给其他消费者）
+                            $msg->delivery_info['channel']->basic_reject($msg->delivery_info['delivery_tag'], true);
+                            static::error(new \RuntimeException("队列[{$queueName}]业务处理拒绝（重新入队）：" . $msg->body));
+                        }
+                    } catch (\Throwable $exception) {
+                        // 致命异常：拒绝重新入队（避免无限循环）
+                        $msg->delivery_info['channel']->basic_reject($msg->delivery_info['delivery_tag'], false);
+                        static::error(new \RuntimeException("队列[{$queueName}]业务处理异常：" . $exception->getMessage() . "，消息：" . $msg->body));
                     }
-                    /** 如果执行了消费数量，那么需要减少数量 */
+
+                    // 9. 递减消费计数（指定消费数量时）
                     if (static::$total > 0) {
                         static::$remain--;
                     }
                 };
 
-                /** 一次一条消息，在未收到消息确认之前不会分配新的消息 */
-                static::$channel->basic_qos(0, 1, false);
-                /** 给队列绑定消费逻辑 这里要注意一下，第二个参数添加了标签，主要是用来后面关闭通道使用，并且不会接收本消费者发送的消息 */
-                static::$channel->basic_consume(
-                    static::$queueName,
-                    static::$queueName,
+                // 10. 配置消费参数（一次1条，手动确认）
+                $channel->basic_qos(0, 1, false);
+                // 绑定业务队列到当前信道
+                $channel->basic_consume(
+                    $queueName,
+                    $queueName . "_consumer_" . uniqid(), // 唯一消费者标签
                     false,
                     false,
                     false,
@@ -541,71 +570,63 @@ abstract class Client implements RabbiMQInterface
                     $businessCallback
                 );
 
-                /** 如果设置了消费总数限制 */
-                if (static::$total) {
-                    /** 没次消费都要判断剩余可消费数 */
-                    while (static::$remain > 0 && count(static::$channel->callbacks)) {
+                // 11. 开始消费（按指定数量或持续消费）
+                //static::error(new \RuntimeException("队列[{$queueName}]开始消费（PID：" . getmypid() . "），本次消费" . ($count > 0 ? $count . "条" : "持续消费")));
+                if (static::$total > 0) {
+                    // 指定消费数量：消费完指定条数后退出
+                    while (static::$remain > 0 && \count($channel->callbacks)) {
                         if (static::$IS_NOT_WINDOWS) {
                             static::monitorDlxProcess();
                         }
-                        static::$channel->wait();
-                        /** 切换cpu */
-                        usleep(1);
+                        $channel->wait();
+                        \usleep(1);
                     }
+                    static::error(new \RuntimeException("队列[{$queueName}]指定消费数量已完成（共" . static::$total . "条）"));
                 } else {
-                    /** 如果没有限制，那么就一直消费 */
-                    # static::$channel->callbacks 获取当前信道上已注册的消费者
-                    // 如果还有存活的已注册的消费者，那么就要继续等待消息，如果消费者 被手动取消basic_cancel，或者被服务器连接断开，消费者被清空
-                    // 那么这个时候就不需要等待接受新消息，退出监听
-                    while (count(static::$channel->callbacks)) {
+                    // 持续消费：直到信道关闭或手动停止
+                    while (\count($channel->callbacks)) {
                         if (static::$IS_NOT_WINDOWS) {
                             static::monitorDlxProcess();
                         }
-                        static::$channel->wait();
-                        /** 切换cpu */
-                        usleep(1);
+                        $channel->wait();
+                        \usleep(1);
                     }
                 }
-                /** 消费完成，则退出循环 */
+
+                // 12. 消费完成：退出循环
                 break;
+
             } catch (\PhpAmqpLib\Exception\AMQPConnectionClosedException $exception) {
-                /** 连接断开则重连 */
-                call_user_func([get_called_class(), 'error'], new \RuntimeException("业务消费连接断开：" . $exception->getMessage()));
-                static::close();
-                sleep(static::getSleepTime());
+                // 13. 连接断开：清理后重试
+                static::error(new \RuntimeException("队列[{$queueName}]连接已断开：" . $exception->getMessage()));
+                static::close($connectKey);
+                \sleep(static::getSleepTime());
             } catch (\Throwable $exception) {
-                /** 其他类型的异常，先处理错误 */
-                call_user_func([get_called_class(), 'error'], new \RuntimeException($exception->getMessage()));
+                // 14. 其他异常：判断是否可恢复
+                static::error(new \RuntimeException("队列[{$queueName}]消费异常：" . $exception->getMessage()));
+                $isPossiblyRecoverable = $exception instanceof \PhpAmqpLib\Exception\AMQPRuntimeException;
 
-                // 默认这些错误不可恢复，比如代码错误，需要修复代码
-                $isPossiblyRecoverable = false;
-                // 但是如果这些错误是rabbitmq的，那么可能是服务信号异常等情况，属于可恢复的条件
-                if ($exception instanceof \PhpAmqpLib\Exception\AMQPRuntimeException) {
-                    // RabbitMQ相关异常：部分是临时的（如信道满了），这种等一下可以恢复
-                    $isPossiblyRecoverable = true;
-                }
-
-                // 确认不能恢复，则断开连接
                 if (!$isPossiblyRecoverable) {
-                    call_user_func([get_called_class(), 'error'], new \RuntimeException("判断为致命错误（非临时异常），进程退出。详情：" . $exception->getMessage()));
+                    // 致命异常（如代码错误）：退出进程
+                    static::error(new \RuntimeException("队列[{$queueName}]检测到致命错误，进程退出"));
                     break;
                 }
 
-                // 临时错误：继续重连
-                static::close();
-                sleep(static::getSleepTime());
+                // 可恢复异常：清理后重试
+                static::close($connectKey);
+                \sleep(static::getSleepTime());
             }
         }
 
-        if (static::$enableDlx && static::$dlxPid > 0) {
-            /** linux环境自动杀死子进程，windows环境是独立的进程不需要杀死 */
-            if (static::isNotWindows()) {
-                \posix_kill(static::$dlxPid, \SIGTERM);
-                call_user_func([get_called_class(), 'error'], new \RuntimeException("关闭死信子进程（PID：" . static::$dlxPid . "）"));
-            }
+        // 15. 消费结束：清理资源
+        // 关闭死信子进程（Linux）
+        if (static::$enableDlx && static::$dlxPid > 0 && static::isNotWindows()) {
+            \posix_kill(static::$dlxPid, \SIGTERM);
+            static::error(new \RuntimeException("队列[{$queueName}]死信子进程（PID：" . static::$dlxPid . "）已关闭"));
         }
-        /** 回收连接 */
-        static::close();
+        // 关闭当前队列的连接/信道
+        static::close($connectKey);
+        static::error(new \RuntimeException("队列[{$queueName}]消费进程已退出（PID：" . getmypid() . "）"));
     }
 
     /**
@@ -617,9 +638,10 @@ abstract class Client implements RabbiMQInterface
     private static function createMessageDelay(string $msg, int $time = 0): object
     {
         $delayConfig = [
-            'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
+            'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT, // 持久化消息（避免重启丢失）
         ];
-        if ($time) {
+        // 延迟消息：添加x-delay头（需交换机类型为x-delayed-message）
+        if ($time > 0) {
             $delayConfig['application_headers'] = new AMQPTable(['x-delay' => $time * 1000]);
         }
         return new AMQPMessage($msg, $delayConfig);
@@ -627,57 +649,107 @@ abstract class Client implements RabbiMQInterface
 
     /**
      * 投递消息
-     * @param string $msg 消息
-     * @param int $delay 延迟时间
+     * @param string $msg 消息（JSON字符串）
+     * @param int $delay 延迟时间（秒）
      * @return bool 是否投递成功
+     * @note 完善：使用当前队列的connectKey和信道，确保消息投递到正确队列
      */
     private static function sendDelay(string $msg, int $delay = 0)
     {
-        /** 构建连接 */
-        if (!static::isConnected()) {
-            static::make();
-            if (!self::isConnected()) {
+        // 1. 获取当前队列的唯一标识
+        [$exchangeName, $queueName, $connectKey] = static::getQueueName();
+
+        // 2. 确保连接有效
+        if (!static::isConnected($connectKey)) {
+            if (!static::make()) {
+                static::error(new \RuntimeException("队列[{$queueName}]连接无效，投递失败"));
                 return false;
             }
         }
+
+        // 3. 获取当前队列的信道
+        $channel = static::$channels[$connectKey];
+        if (!$channel || !$channel->is_open()) {
+            static::error(new \RuntimeException("队列[{$queueName}]信道已关闭，投递失败"));
+            static::close($connectKey); // 清理无效信道
+            return false;
+        }
+
+        // 4. 创建消息（持久化+延迟配置）
         static::$timeOut = $delay;
         $_msg = static::createMessageDelay($msg, static::$timeOut);
+
         try {
-            static::$channel->basic_publish($_msg, static::$exchangeName, static::$queueName);
+            // 5. 投递消息到当前队列的交换机+路由键
+            $channel->basic_publish(
+                $_msg,
+                $exchangeName,  // 动态生成的交换机名（非static::$exchangeName）
+                $queueName      // 路由键=队列名（确保精准投递）
+            );
+            // static::error(new \RuntimeException("队列[{$queueName}]消息投递成功：" . $msg));
             return true;
         } catch (\Exception $exception) {
+            // 6. 投递失败：清理资源，返回失败
+            static::error(new \RuntimeException("队列[{$queueName}]消息投递失败：" . $exception->getMessage() . "，消息：" . $msg));
+            static::close($connectKey);
             return false;
         }
     }
 
     /**
-     * 关闭服务
+     * 关闭指定队列的连接和信道
+     * @param string $key 连接key（交换机名@队列名）
      * @return void
+     * @note 完善：仅清理指定key的资源，不影响其他队列
      */
-    public static function close()
+    public static function close(string $key)
     {
-        if (static::$instance && static::$instance->isConnected()) {
+        // 1. 清理信道（先关信道再关连接）
+        if (isset(static::$channels[$key]) && static::$channels[$key]->is_open()) {
             try {
-                /** 关闭信道 */
-                static::$channel->close();
-                /** 关闭连接 */
-                static::$connection->close();
+                static::$channels[$key]->close();
+            } catch (\Exception $e) {
+                // 忽略关闭异常（避免资源已释放导致报错）
+            }
+            unset(static::$channels[$key]); // 从数组中移除
+        }
+
+        // 2. 清理连接
+        if (isset(static::$connections[$key]) && static::$connections[$key]->isConnected()) {
+            try {
+                static::$connections[$key]->close();
             } catch (\Exception $e) {
                 // 忽略关闭异常
             }
+            unset(static::$connections[$key]); // 从数组中移除
         }
-        static::$instance = null;
-        static::$connection = null;
-        static::$channel = null;
+
+        // 3. 清理连接状态
+        if (isset(static::$connecting[$key])) {
+            static::$connecting[$key] = false;
+        }
     }
 
     /**
-     * 判断服务是否已连接
-     * @return bool
+     * 判断指定队列的连接是否有效
+     * @param string $key 连接key（交换机名@队列名）
+     * @return bool 连接+信道是否均有效
+     * @note 完善：仅判断指定key的资源，避免全局属性干扰
      */
-    protected static function isConnected()
+    protected static function isConnected(string $key)
     {
-        return (static::$connection && static::$connection->isConnected() && static::$channel && static::$channel->is_open());
+        // 1. 检查连接是否存在且已连接
+        if (!isset(static::$connections[$key]) || !static::$connections[$key]->isConnected()) {
+            return false;
+        }
+
+        // 2. 检查信道是否存在且已打开
+        if (!isset(static::$channels[$key]) || !static::$channels[$key]->is_open()) {
+            return false;
+        }
+
+        // 3. 连接+信道均有效
+        return true;
     }
 
     /**
@@ -688,19 +760,25 @@ abstract class Client implements RabbiMQInterface
     private static function getSleepTime()
     {
         /** 最大休眠60秒，确保不会频繁请求服务端造成资源浪费 */
-        return min(static::$hasRetryConnect * 5 + rand(0, 5), 60);
+        return \min(static::$hasRetryConnect * 5 + \rand(0, 5), 60);
     }
 
     /**
-     * 投递消息
-     * @param array $msg 消息
-     * @param int $time 延迟时间
-     * @return bool
+     * 投递消息（对外接口）
+     * @param array $msg 消息内容（关联数组）
+     * @param int $time 延迟时间（秒）
+     * @return bool 是否投递成功
      */
     public static function publish(array $msg, int $time = 0)
     {
+        // 投递时关闭重连（避免投递逻辑被重连阻塞）
         static::$maxRetryConnect = 0;
-        return static::sendDelay(json_encode($msg, JSON_UNESCAPED_UNICODE), $time);
+        // 转JSON字符串（保留中文）
+        $jsonMsg = json_encode($msg, JSON_UNESCAPED_UNICODE);
+        if ($jsonMsg === false) {
+            static::error(new \RuntimeException("消息JSON编码失败：" . json_last_error_msg()));
+            return false;
+        }
+        return static::sendDelay($jsonMsg, $time);
     }
-
 }
