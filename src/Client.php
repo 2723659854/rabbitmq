@@ -279,7 +279,7 @@ abstract class Client implements RabbiMQInterface
             static::$connecting[$connectKey] = false;
             static::close($connectKey); // 清理当前队列的旧资源
 
-            // 重试逻辑：未达最大次数则递归重连
+            // 重试逻辑：消费者必须一直尝试连接，确保业务数据被处理，除非管理员手动关闭队列进程
             if (static::$maxRetryConnect) {
                 static::$hasRetryConnect++;
                 $sleepTime = static::getSleepTime();
@@ -287,6 +287,7 @@ abstract class Client implements RabbiMQInterface
                 \sleep($sleepTime);
                 return static::make(); // 递归重连
             } else {
+                // 投递消息不可重试，连接失败不处理，防止阻塞其他业务，异常情况使用error通知管理员，由人工干预
                 static::error(new \RuntimeException("队列[{$queueName}]重连达最大次数（" . static::$maxRetryConnect . "次），已停止重试"));
                 return false;
             }
