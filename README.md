@@ -494,6 +494,7 @@ kill -9 PID
 ```php
  /**
   * 业务逻辑 
+  * @note 此处仅作为示例，请根据实际业务需求调整cmd命令 
   */
  public static function handle(array $params): int
  {
@@ -501,6 +502,8 @@ kill -9 PID
         $id = $params['id'];
         # 你可以传入任意参数，但是需要你自己在/home/index/index里手动解析这些参数
         $cmd = "timeout -s 3 10 php index.php /home/index/index --id={$id}";
+        $res = shell_exec($cmd);
+        var_dump($res);
     }catch (\Exception $exception){
 
     }
