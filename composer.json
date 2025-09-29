@@ -1,12 +1,26 @@
 {
   "name": "xiaosongshu/rabbitmq",
   "description": "支持rabbitmq消息队列，兼容thinkphp,laravel,webman,yii等多个框架",
-  "keywords": ["rabbitmq","queue","php","thinkphp","laravel","webman","yii","message"],
+  "keywords": [
+    "rabbitmq",
+    "queue",
+    "php",
+    "thinkphp",
+    "laravel",
+    "webman",
+    "yii",
+    "message"
+  ],
   "type": "library",
   "license": "MIT",
   "autoload": {
     "psr-4": {
       "Xiaosongshu\\Rabbitmq\\": "src/"
+    },
+    "autoload-dev": {
+      "psr-4": {
+        "Xiaosongshu\\Rabbitmq\\Examples\\": "examples/"
+      }
     }
   },
   "authors": [

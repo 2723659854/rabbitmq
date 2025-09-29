@@ -9,9 +9,7 @@ use PhpAmqpLib\Wire\AMQPTable;
 /**
  * @purpose rabbitmq客户端
  * @author yanglong
- * @time 2025年7月23日14:07:46
- * @note 重构新版本队列客户端，主要是为了解决客户端因为业务卡死而掉线的问题。
- * @note 解决不同队列数据覆盖问题
+ * @time 2025年9月29日15:25:47
  */
 abstract class Client implements RabbiMQInterface
 {
@@ -782,30 +780,5 @@ abstract class Client implements RabbiMQInterface
             return false;
         }
         return static::sendDelay($jsonMsg, $time);
-    }
-
-    /**
-     * 死信队列业务逻辑
-     * @param array $params
-     * @return int
-     */
-    public static function dlxHandle(array $params):int{
-        return static::ACK;
-    }
-
-    /**
-     * 客户端异常类
-     * @param \RuntimeException $exception
-     * @return void
-     */
-    public static function error(\RuntimeException $exception){}
-
-    /**
-     * 普通队列业务逻辑
-     * @param array $params
-     * @return int
-     */
-    public static function handle(array $params):int{
-        return static::ACK;
     }
 }
