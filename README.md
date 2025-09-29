@@ -461,7 +461,68 @@ kill -9 PID
 当然了，希望你不要照搬我的示例，因为我的代码仅仅是示例，可能不完全符合你的业务需求。
 ### 异常 Exception
 
-队列使用过程中请使用 \RuntimeException和\Exception捕获异常
+队列使用过程中请使用 \RuntimeException和\Exception捕获异常。
+###  特别提示
+
+如果使用thinkphp3.2作为项目框架的时候，作者在实际项目中遇到内存泄漏的问题，经过排查是thinkphp3.2的数据库模型的M方法存在问题，当队列高频次操作数据库
+的时候，队列连续运行72小时左右，内存占用就会暴涨到1G左右，所以建议不要在队列中使用模型。但是实际业务通常是需要操作数据库的，那么有两种解决办法。<br>
+第一种：使用原生的mysql，实例如下所示（此处仅为示例代码，请根据实际情况自行编写代码）:
+```php
+ /**
+  * 业务逻辑 
+  */
+ public static function handle(array $params): int
+ {
+    try{
+        $db = new \mysqli("127.0.0.1", "demo", "root", "root", 3306);
+        $res = $db->query("select * from users");
+        while($row = $res->fetch_assoc()){
+            var_dump($row);
+        }
+        $res->free();
+        $db->close();
+    }catch (\Exception $exception){
+
+    }
+    return self::ACK;
+}
+```
+第二种：使用thinkphp的cli模式<br>
+我们都知道，thinkphp3.2也是支持cli模式的，比如访问路由`/home/index/index`的时候，除了使用`http://your.domain.com/home/index/index` 的方式访问，
+还可以使用cli命令行访问，在cmd窗口项目根目录执行`php index.php /home/index/index`即可访问。那么我们可以将真实的业务写在 `/home/index/index`下。
+那么我们的队列的业务逻辑应该如下：
+```php
+ /**
+  * 业务逻辑 
+  */
+ public static function handle(array $params): int
+ {
+    try{
+        $id = $params['id'];
+        # 你可以传入任意参数，但是需要你自己在/home/index/index里手动解析这些参数
+        $cmd = "timeout -s 3 10 php index.php /home/index/index --id={$id}";
+    }catch (\Exception $exception){
+
+    }
+    return self::ACK;
+}
+```
+实际的业务方法`/home/index/index`如下：
+```php
+ /**
+  * 业务类
+  * @return void
+  * @note 业务本不需要如此复杂，被逼无奈，出此下策。
+  */
+  public function index()
+  {
+    # 此处将会打印出通过上面的命令传入的参数，可能需要你自己来解析这些参数，这些都是很简单的，就不写示例了。
+    $argv = $_SERVER['argv'];
+    var_dump($argv);
+  }
+```
+你也可以单独编写一个入口文件`cli.php`代替原来的`index.php`。将fpm和cli拆分开来，然后在`cli.php`中编写解析入参的函数。是不是感觉搞得好复杂，是就对了。如果你是使用的
+thinkphp5以上的版本或者laravel5以上等等比较新的框架作为项目底层架构，他们已经有成熟的队列插件，你就不需要使用本插件查看本文档了，本插件只是给予一种新的解决方案而已。
 
 #### 若需要使用延迟队列，那么rabbitmq服务需要安装延迟插件，否则会报错
 
