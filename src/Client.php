@@ -10,6 +10,7 @@ use PhpAmqpLib\Wire\AMQPTable;
  * @purpose rabbitmq客户端
  * @author yanglong
  * @time 2025年9月29日15:25:47
+ * @note 客户端必须实现handle,dlxHandle,error方法
  */
 abstract class Client implements RabbiMQInterface
 {
