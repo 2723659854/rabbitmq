@@ -59,6 +59,9 @@ class Demo extends \Xiaosongshu\Rabbitmq\Client
 
     /** @var bool $enableDlx 是否开启死信队列 */
     public static $enableDlx = true;
+    
+    /** 设置为延迟队列,若使用延迟队列，那么可以不设置 */
+    public static $type = self::EXCHANGETYPE_DELAYED;
 
     /**
      * 业务处理
