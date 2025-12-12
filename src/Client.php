@@ -182,12 +182,29 @@ abstract class Client implements RabbiMQInterface
             static::$channels[$connectKey] = $channel; // 存入信道数组
 
             // 8. 声明当前队列的业务交换机（幂等操作：已存在则忽略）
+//            $channel->exchange_declare(
+//                $exchangeName,  // 用动态生成的交换机名（非static::$exchangeName）
+//                $exchangeType,
+//                false,          // passive：不检查是否存在（直接创建）
+//                true,           // durable：持久化（重启后不丢失）
+//                false           // auto_delete：不自动删除
+//            );
+
+            $exchangeArguments = new AMQPTable();
+            // 若为延迟交换机，补充 x-delayed-type 参数
+            if ($exchangeType === static::EXCHANGETYPE_DELAYED) {
+                $exchangeArguments->set('x-delayed-type', static::EXCHANGETYPE_DIRECT); // 底层转发类型
+            }
+
             $channel->exchange_declare(
-                $exchangeName,  // 用动态生成的交换机名（非static::$exchangeName）
-                $exchangeType,
-                false,          // passive：不检查是否存在（直接创建）
-                true,           // durable：持久化（重启后不丢失）
-                false           // auto_delete：不自动删除
+                $exchangeName,  // 交换机名称
+                $exchangeType,  // 交换机类型
+                false,          // passive
+                true,           // durable
+                false,          // auto_delete
+                false,          // internal
+                false,          // nowait
+                $exchangeArguments
             );
 
             // 9. 准备业务队列参数（含死信配置）
