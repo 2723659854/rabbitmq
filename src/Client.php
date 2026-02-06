@@ -174,7 +174,7 @@ abstract class Client implements RabbiMQInterface
             static::$connections[$connectKey] = new AMQPStreamConnection(
                 static::$host, static::$port, static::$user, static::$pass,
                 '/', false, 'AMQPLAIN', null, 'en_US', 1.0,
-                3.0, null, false, static::$heartbeat, 0.0, null, null
+                3.0, null, true, static::$heartbeat, 0.0, null, null
             );
 
             // 7. 创建当前队列的独立信道（每个连接对应一个信道）
@@ -182,14 +182,6 @@ abstract class Client implements RabbiMQInterface
             static::$channels[$connectKey] = $channel; // 存入信道数组
 
             // 8. 声明当前队列的业务交换机（幂等操作：已存在则忽略）
-//            $channel->exchange_declare(
-//                $exchangeName,  // 用动态生成的交换机名（非static::$exchangeName）
-//                $exchangeType,
-//                false,          // passive：不检查是否存在（直接创建）
-//                true,           // durable：持久化（重启后不丢失）
-//                false           // auto_delete：不自动删除
-//            );
-
             $exchangeArguments = new AMQPTable();
             // 若为延迟交换机，补充 x-delayed-type 参数
             if ($exchangeType === static::EXCHANGETYPE_DELAYED) {
@@ -449,7 +441,7 @@ abstract class Client implements RabbiMQInterface
                 // 6. 持续监听死信消息
                 //static::error(new \RuntimeException("死信队列[{$dlxQueueName}]开始监听（PID：" . getmypid() . "）"));
                 while (\count($channel->callbacks)) {
-                    $channel->wait();
+                    $channel->wait(null, true, 10);
                     \usleep(1); // 切换CPU，避免占用过高
                 }
 
@@ -596,7 +588,7 @@ abstract class Client implements RabbiMQInterface
                         if (static::$IS_NOT_WINDOWS) {
                             static::monitorDlxProcess();
                         }
-                        $channel->wait();
+                        $channel->wait(null, true, 10);
                         \usleep(1);
                     }
                     static::error(new \RuntimeException("队列[{$queueName}]指定消费数量已完成（共" . static::$total . "条）"));
@@ -606,7 +598,7 @@ abstract class Client implements RabbiMQInterface
                         if (static::$IS_NOT_WINDOWS) {
                             static::monitorDlxProcess();
                         }
-                        $channel->wait();
+                        $channel->wait(null, true, 10);
                         \usleep(1);
                     }
                 }
