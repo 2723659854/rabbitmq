@@ -661,38 +661,16 @@ abstract class Client implements RabbiMQInterface
      * 检测连接的心跳状态
      * @param string $connectKey 目标队列的连接key
      * @return bool 连接是否存活
-     * @note 这里仅使用心跳时间来检测客户端是否存活，如果最近一次的心跳上报时间小于2倍周期，则认为存活，否则认为已断开。无网络开销，不关闭连接不会影响现有的连接状态
+     * @note
      */
     private static function isConnectionAlive(string $connectKey): bool
     {
-        // 1. 基础检测：连接/信道不存在则直接失效
         if (!static::isConnected($connectKey)) {
             return false;
         }
-
-        $connection = static::$connections[$connectKey];
         $channel = static::$channels[$connectKey];
-
         try {
-            // 2. 检测信道是否打开（必检：连接活但信道死的情况很常见）
-            if (!$channel->is_open()) {
-                static::error(new \RuntimeException("队列[{$connectKey}]信道已关闭"));
-                return false;
-            }
-
-            // 3. 核心：检测最后活动时间（贴合AMQP心跳协议）
-            $lastActivity = $connection->getLastActivityTime();
-            $currentTime = time();
-            $maxIdleTime = static::$heartbeat * 2; // AMQP标准：2倍心跳周期无通信则断开
-
-            // 兼容：若lastActivity为0（未初始化），视为连接失效
-            if ($lastActivity <= 0 || ($currentTime - $lastActivity) > $maxIdleTime) {
-                static::error(new \RuntimeException(
-                    "队列[{$connectKey}]连接空闲超时（最后活动时间：{$lastActivity}，当前时间：{$currentTime}，最大容忍时间：{$maxIdleTime}秒）"
-                ));
-                return false;
-            }
-
+            $channel->basic_qos(0, 1, false);
             return true;
         } catch (\Exception $e) {
             static::error(new \RuntimeException("队列[{$connectKey}]连接检测异常：" . $e->getMessage()));
@@ -709,13 +687,9 @@ abstract class Client implements RabbiMQInterface
      */
     private static function sendDelay(string $msg, int $delay = 0)
     {
-        // 1. 获取当前队列的唯一标识
         [$exchangeName, $queueName, $connectKey] = static::getQueueName();
-
-        // 2. 核心改造：检测连接心跳是否真的存活
         $isAlive = static::isConnectionAlive($connectKey);
         if (!$isAlive) {
-            // 心跳失效：仅关闭B队列的连接（不碰A队列），然后重建
             static::close($connectKey);
             if (!static::make()) {
                 static::error(new \RuntimeException("队列[{$queueName}]心跳失效，重建连接失败，投递失败"));
@@ -723,46 +697,19 @@ abstract class Client implements RabbiMQInterface
             }
         }
 
-        // 3. 确保连接有效
-        if (!static::isConnected($connectKey)) {
-            if (!static::make()) {
-                static::error(new \RuntimeException("队列[{$queueName}]连接无效，投递失败"));
-                return false;
-            }
-        }
-
-        // 4. 获取当前队列的信道
         $channel = static::$channels[$connectKey];
-        if (!$channel || !$channel->is_open()) {
-            // 重连一次
-            static::close($connectKey);
-            if (!static::make()) {
-                static::error(new \RuntimeException("队列[{$queueName}]连接无效，重建连接失败，投递失败"));
-                return false;
-            }
-            if (!static::$channels[$connectKey] || !static::$channels[$connectKey]->is_open()) {
-                static::error(new \RuntimeException("队列[{$queueName}]信道已关闭，投递失败"));
-                static::close($connectKey); // 清理无效信道
-                return false;
-            }
-            // 重新获取连接
-            $channel = static::$channels[$connectKey];
-        }
 
-        // 5. 创建消息（持久化+延迟配置）
         static::$timeOut = $delay;
         $_msg = static::createMessageDelay($msg, static::$timeOut);
 
         try {
-            // 6. 投递消息到当前队列的交换机+路由键
             $channel->basic_publish(
                 $_msg,
-                $exchangeName,  // 动态生成的交换机名（非static::$exchangeName）
-                $queueName      // 路由键=队列名（确保精准投递）
+                $exchangeName,
+                $queueName
             );
             return true;
         } catch (\Exception $exception) {
-            // 7. 投递失败：清理资源，返回失败
             static::error(new \RuntimeException("队列[{$queueName}]消息投递失败：" . $exception->getMessage() . "，消息：" . $msg));
             static::close($connectKey);
             return false;
