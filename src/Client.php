@@ -792,13 +792,23 @@ abstract class Client implements RabbiMQInterface
     public static function publish(array $msg, int $time = 0)
     {
         // 投递时关闭重连（避免投递逻辑被重连阻塞）
-        static::$maxRetryConnect = 0;
-        // 转JSON字符串（保留中文）
-        $jsonMsg = json_encode($msg, JSON_UNESCAPED_UNICODE);
-        if ($jsonMsg === false) {
-            static::error(new \RuntimeException("消息JSON编码失败：" . json_last_error_msg()));
+        $originMaxRetry = static::$maxRetryConnect;
+
+        try{
+            static::$maxRetryConnect = 0;
+            // 转JSON字符串（保留中文）
+            $jsonMsg = json_encode($msg, JSON_UNESCAPED_UNICODE);
+            if ($jsonMsg === false) {
+                static::error(new \RuntimeException("消息JSON编码失败：" . json_last_error_msg()));
+                return false;
+            }
+            return static::sendDelay($jsonMsg, $time);
+        }catch (\Exception $exception){
+            static::error(new \RuntimeException($exception->getMessage()));
             return false;
+        }finally{
+            // 还原最大尝试次数，防止破坏了消费者原有的重连逻辑
+            static::$maxRetryConnect = $originMaxRetry;
         }
-        return static::sendDelay($jsonMsg, $time);
     }
 }
