@@ -543,4 +543,6 @@ thinkphp5以上的版本或者laravel5以上等等比较新的框架作为项目
 ```bash
 docker run -d --restart always --name faster-rabbitmq -p 5671:5671 -p 5672:5672 -p 15671:15671 -p 15672:15672 -p 61613:61613 -v /d/rabbitmq/:/var/log/rabbitmq/ -e RABBITMQ_DEFAULT_USER=admin -e RABBITMQ_DEFAULT_PASS=123456 -e RABBITMQ_DEFAULT_VHOST=/ rabbitmq:3.8-management-alpine
 ```
-
+#### 其它
+纯PHP搭建的rtmp直播服务器，支持rtmp,flv,hls协议
+项目地址<a href="https://github.com/2723659854/rtmp_server">rtmp_server</a>
