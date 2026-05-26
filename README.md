@@ -545,4 +545,4 @@ docker run -d --restart always --name faster-rabbitmq -p 5671:5671 -p 5672:5672 
 ```
 #### 其它
 纯PHP搭建的rtmp直播服务器，支持rtmp,flv,hls协议
-项目地址<a href="https://github.com/2723659854/rtmp_server">rtmp_server</a>
+项目地址<a href="https://github.com/2723659854/rtmp-server">rtmp_server</a>
